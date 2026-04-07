@@ -82,14 +82,12 @@ Suggest 1-2 relevant resources (articles, videos, tools) grounded in current pro
     syncEnabled: true,
     webhookSecret: 'secret_change_me_123',
     repos: []
-    // repos are auto-populated from Github Setups DB on each scan
   },
   notion: {
     // These are auto-filled during setup/backfill from DB IDs
     projectsDb: '33b56b0e-dde0-8033-98c4-d5a5098e50e1',
     buildLogsDb: '33b56b0e-dde0-80ee-aaf4-e07594673071',
     ideaLogsDb: '33b56b0e-dde0-8047-bd1f-e33ed88e5a1f',
-    githubSetupsDb: '33b56b0e-dde0-8092-ac21-fab610ab52ba',
     /** Notion database ID — each standup is a new row (title = Daily Stand-up - YYYY-MM-DD). */
     standupDb: null,
     /** Optional: database of posts the user actually published (for voice/style in standup). See social-media-db-setup.md */
@@ -121,6 +119,9 @@ function load() {
       const merged = deepMerge(DEFAULT_CONFIG, raw);
       if (merged.notion && Object.prototype.hasOwnProperty.call(merged.notion, 'standupParentPage')) {
         delete merged.notion.standupParentPage;
+      }
+      if (merged.notion && Object.prototype.hasOwnProperty.call(merged.notion, 'githubSetupsDb')) {
+        delete merged.notion.githubSetupsDb;
       }
       return merged;
     } catch (e) {

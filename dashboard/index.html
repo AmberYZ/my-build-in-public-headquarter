@@ -285,7 +285,7 @@
         <div class="card-header">
           <div>
             <div class="card-title">GitHub Repos from Notion</div>
-            <div class="card-subtitle">Auto-populated from Github Setups DB</div>
+            <div class="card-subtitle">Repos from Projects database (Github URL column)</div>
           </div>
           <div class="badge badge-green" id="github-repo-count">—</div>
         </div>
@@ -350,10 +350,6 @@
             <div class="form-group">
               <label>Idea Logs DB</label>
               <input type="text" id="cfg-idealog-db">
-            </div>
-            <div class="form-group">
-              <label>Github Setups DB</label>
-              <input type="text" id="cfg-githubsetups-db">
             </div>
           </div>
         </div>
@@ -599,7 +595,6 @@ async function loadDashboard() {
     document.getElementById('cfg-projects-db').value = cfg.notion?.projectsDb || '';
     document.getElementById('cfg-buildlogs-db').value = cfg.notion?.buildLogsDb || '';
     document.getElementById('cfg-idealog-db').value = cfg.notion?.ideaLogsDb || '';
-    document.getElementById('cfg-githubsetups-db').value = cfg.notion?.githubSetupsDb || '';
     document.getElementById('cfg-standup-db').value = cfg.notion?.standupDb || '';
     document.getElementById('cfg-social-db').value = cfg.notion?.socialMediaDb || '';
     document.getElementById('cfg-port').value = cfg.server?.port || 3001;
@@ -758,7 +753,7 @@ async function loadGithub() {
     const el = document.getElementById('github-repos');
     document.getElementById('github-repo-count').textContent = r.repos.length + ' repos';
     if (r.repos.length === 0) {
-      el.innerHTML = '<div style="color:var(--text-dim);font-size:13px">No repos found in Github Setups DB</div>';
+      el.innerHTML = '<div style="color:var(--text-dim);font-size:13px">No Github URLs on Projects — add a repo URL to the Github field on each project row.</div>';
       return;
     }
     el.innerHTML = r.repos.map(repo => `
@@ -821,7 +816,6 @@ async function saveConfig() {
       projectsDb: document.getElementById('cfg-projects-db').value,
       buildLogsDb: document.getElementById('cfg-buildlogs-db').value,
       ideaLogsDb: document.getElementById('cfg-idealog-db').value,
-      githubSetupsDb: document.getElementById('cfg-githubsetups-db').value,
       standupDb: document.getElementById('cfg-standup-db').value.trim() || null,
       socialMediaDb: document.getElementById('cfg-social-db').value.trim() || null
     },

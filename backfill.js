@@ -1,16 +1,25 @@
 /**
  * backfill.js
- * Scans GitHub repos from the Github Setups DB, fetches recent commits (last 7 days),
+ * Scans GitHub repos listed on each Projects DB row (Github URL), fetches recent commits (last 7 days),
  * and creates Build Log entries for any commits not already logged.
  */
 require('dotenv').config();
 const { Client } = require('@notionhq/client');
 const axios = require('axios');
 const { load, logActivity } = require('./config-store');
+const { socksAxiosOptions } = require('./outbound-http');
+const { fetchProjectsWithGithubUrl, appendBuildLogToProject } = require('./notion-project-github');
 
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
 const GITHUB_API = 'https://api.github.com';
+
+function githubHeaders() {
+  const h = { Accept: 'application/vnd.github.v3+json' };
+  const t = process.env.GITHUB_TOKEN;
+  if (t) h.Authorization = `Bearer ${t}`;
+  return h;
+}
 
 // Extract owner/repo from a GitHub URL
 function parseRepoUrl(url) {
@@ -23,11 +32,14 @@ function parseRepoUrl(url) {
 async function fetchRecentCommits(owner, repo, days = 7) {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
   try {
-    const resp = await axios.get(`${GITHUB_API}/repos/${owner}/${repo}/commits`, {
-      params: { since, per_page: 100 },
-      headers: { Accept: 'application/vnd.github.v3+json' },
-      timeout: 15000
-    });
+    const resp = await axios.get(
+      `${GITHUB_API}/repos/${owner}/${repo}/commits`,
+      socksAxiosOptions({
+        params: { since, per_page: 100 },
+        headers: githubHeaders(),
+        timeout: 15000
+      })
+    );
     return resp.data.map(c => ({
       sha: c.sha,
       message: c.commit.message.split('\n')[0], // first line only
@@ -47,10 +59,13 @@ async function fetchRecentCommits(owner, repo, days = 7) {
 // Fetch detailed commit info (files changed) for a commit
 async function fetchCommitDetails(owner, repo, sha) {
   try {
-    const resp = await axios.get(`${GITHUB_API}/repos/${owner}/${repo}/commits/${sha}`, {
-      headers: { Accept: 'application/vnd.github.v3+json' },
-      timeout: 10000
-    });
+    const resp = await axios.get(
+      `${GITHUB_API}/repos/${owner}/${repo}/commits/${sha}`,
+      socksAxiosOptions({
+        headers: githubHeaders(),
+        timeout: 10000
+      })
+    );
     const files = resp.data.files || [];
     return {
       files_added: files.filter(f => f.status === 'added').map(f => f.filename),
@@ -78,42 +93,6 @@ async function getExistingBuildLogUrls(buildLogsDbId) {
   } catch (err) {
     console.error('[Backfill] Error fetching existing build logs:', err.message);
     return new Set();
-  }
-}
-
-// Look up a project page ID by GitHub repo URL
-async function findProjectByGithub(projectsDbId, repoUrl) {
-  try {
-    const resp = await notion.databases.query({
-      database_id: projectsDbId,
-      filter: { property: 'Github', url: { equals: repoUrl } },
-      page_size: 1
-    });
-    return resp.results.length > 0 ? resp.results[0].id : null;
-  } catch {
-    return null;
-  }
-}
-
-// Append a Build Log page ID to the Projects DB's Build Logs relation (parent-side link)
-async function linkBuildLogToProject(projectPageId, buildLogPageId) {
-  if (!projectPageId || !buildLogPageId) return;
-  try {
-    await notion.pages.append({
-      page_id: projectPageId,
-      children: [] // no children needed — just append to the relation property
-    });
-    // Actually append to the Build Logs relation property
-    await notion.pages.update({
-      page_id: projectPageId,
-      properties: {
-        'Build Logs': {
-          relation: [{ id: buildLogPageId }]
-        }
-      }
-    });
-  } catch (err) {
-    console.warn('[Backfill] Could not link Build Log to project:', err.message);
   }
 }
 
@@ -145,25 +124,19 @@ async function runBackfill() {
   const { notion: notionCfg, github } = cfg;
   const projectsDb = notionCfg.projectsDb;
   const buildLogsDb = notionCfg.buildLogsDb;
-  const githubSetupsDb = notionCfg.githubSetupsDb;
 
   console.log('[Backfill] Starting GitHub → Notion backfill...');
 
-  // Step 1: Get all repos from Github Setups DB
-  let setups = [];
+  let projects = [];
   try {
-    const resp = await notion.databases.query({
-      database_id: githubSetupsDb,
-      page_size: 50
-    });
-    setups = resp.results;
+    projects = await fetchProjectsWithGithubUrl(notion, projectsDb);
   } catch (err) {
-    console.error('[Backfill] Failed to query Github Setups DB:', err.message);
+    console.error('[Backfill] Failed to query Projects DB:', err.message);
     return { success: false, error: err.message };
   }
 
-  if (setups.length === 0) {
-    console.log('[Backfill] No repos found in Github Setups DB');
+  if (projects.length === 0) {
+    console.log('[Backfill] No projects with a Github URL — add repo links to the **Github** field in your Projects database.');
     return { success: true, repos: 0, created: 0 };
   }
 
@@ -175,17 +148,14 @@ async function runBackfill() {
   let totalCreated = 0;
   const repoResults = [];
 
-  for (const setup of setups) {
-    const repoUrl = setup.properties?.['Github Repo']?.url;
-    const projectName = setup.properties?.['Project Name']?.title?.[0]?.plain_text || repoUrl;
-
+  for (const { id: projectId, name: projectName, repoUrl } of projects) {
     const parsed = parseRepoUrl(repoUrl);
     if (!parsed) {
-      console.warn(`[Backfill] Invalid repo URL: ${repoUrl}`);
+      console.warn(`[Backfill] Invalid repo URL on project "${projectName}": ${repoUrl}`);
       continue;
     }
 
-    console.log(`\n[Backfill] Processing ${parsed.owner}/${parsed.repo}...`);
+    console.log(`\n[Backfill] Processing ${parsed.owner}/${parsed.repo} (${projectName})...`);
     const commits = await fetchRecentCommits(parsed.owner, parsed.repo, 7);
     console.log(`[Backfill] Found ${commits.length} commits in last 7 days`);
 
@@ -194,13 +164,12 @@ async function runBackfill() {
       continue;
     }
 
-    // Fetch project link
-    const projectId = await findProjectByGithub(projectsDb, repoUrl);
+    console.log(`[Backfill] Project page: ${projectId}`);
 
-    let created = 0;
+    let repoCreated = 0;
     for (const commit of commits) {
       if (existingUrls.has(commit.url)) {
-        console.log(`[Backfill]   Skipping ${commit.sha.slice(0,7)} — already exists`);
+        console.log(`[Backfill]   Skipping ${commit.sha.slice(0, 7)} — already exists`);
         continue;
       }
 
@@ -212,17 +181,16 @@ async function runBackfill() {
       ].join('\n');
 
       try {
-        const created = await createBuildLog(buildLogsDb, {
+        const newPage = await createBuildLog(buildLogsDb, {
           message: commit.message,
           url: commit.url,
           date: commit.date,
           files_changed: filesChanged,
           projectId
         });
-        // Link Build Log to the Project from the parent (Projects DB) side
-        await linkBuildLogToProject(projectId, created.id);
+        await appendBuildLogToProject(notion, projectId, newPage.id);
         existingUrls.add(commit.url);
-        created++;
+        repoCreated++;
         totalCreated++;
         console.log(`[Backfill]   ✅ Created: ${commit.message.slice(0, 50)}`);
       } catch (err) {
@@ -232,7 +200,11 @@ async function runBackfill() {
       await new Promise(r => setTimeout(r, 100));
     }
 
-    repoResults.push({ repo: `${parsed.owner}/${parsed.repo}`, commits: commits.length, created });
+    repoResults.push({
+      repo: `${parsed.owner}/${parsed.repo}`,
+      commits: commits.length,
+      created: repoCreated
+    });
   }
 
   const summary = { success: true, repos: repoResults, totalCreated };

@@ -219,19 +219,13 @@ app.post('/api/github/backfill', async (req, res) => {
 
 app.get('/api/github/repos', async (req, res) => {
   const { Client } = require('@notionhq/client');
+  const { fetchProjectsWithGithubUrl } = require('./notion-project-github');
   const notion = new Client({ auth: process.env.NOTION_API_KEY });
+  const fresh = load();
 
   try {
-    const resp = await notion.databases.query({
-      database_id: cfg.notion.githubSetupsDb,
-      page_size: 50
-    });
-
-    const repos = resp.results.map(p => ({
-      name: p.properties?.['Project Name']?.title?.[0]?.plain_text || 'Unknown',
-      url: p.properties?.['Github Repo']?.url || ''
-    })).filter(r => r.url);
-
+    const projects = await fetchProjectsWithGithubUrl(notion, fresh.notion.projectsDb);
+    const repos = projects.map(p => ({ name: p.name, url: p.repoUrl }));
     res.json({ repos });
   } catch (err) {
     res.status(500).json({ error: err.message });

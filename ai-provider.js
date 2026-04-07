@@ -1,32 +1,5 @@
 const axios = require('axios');
-const { SocksProxyAgent } = require('socks-proxy-agent');
-
-const outboundProxy =
-  process.env.HTTPS_PROXY ||
-  process.env.https_proxy ||
-  process.env.HTTP_PROXY ||
-  process.env.http_proxy ||
-  process.env.ALL_PROXY ||
-  process.env.all_proxy ||
-  '';
-
-let socksAgent = null;
-if (outboundProxy && /^socks/i.test(outboundProxy)) {
-  // Force remote DNS resolution to avoid local DNS failures.
-  const proxyUrl = outboundProxy.replace(/^socks5:\/\//i, 'socks5h://');
-  socksAgent = new SocksProxyAgent(proxyUrl);
-}
-
-function netOpts(opts) {
-  if (!socksAgent) return opts;
-  return {
-    ...opts,
-    // Axios does not support SOCKS via proxy env by default.
-    proxy: false,
-    httpAgent: socksAgent,
-    httpsAgent: socksAgent
-  };
-}
+const { socksAxiosOptions: netOpts } = require('./outbound-http');
 
 const DEFAULT_MODEL_BY_PROVIDER = {
   minimax: 'MiniMax-Text-01',

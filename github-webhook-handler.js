@@ -1,12 +1,7 @@
 const { Client } = require('@notionhq/client');
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 const { load } = require('./config-store');
-
-function parseRepoUrl(url) {
-  const match = url && url.match(/github\.com\/([^\/]+)\/([^\/\?#]+)/);
-  if (match) return { owner: match[1], repo: match[2] };
-  return null;
-}
+const { findProjectPageByGithubUrl, appendBuildLogToProject } = require('./notion-project-github');
 
 async function handleGitHubWebhook(payload) {
   const cfg = load();
@@ -18,18 +13,15 @@ async function handleGitHubWebhook(payload) {
 
   console.log(`[Webhook] Push to ${repoUrl} — ${commits.length} commit(s): "${headCommit?.message}"`);
 
-  // Look up project by GitHub repo URL in Projects DB
   let projectId = null;
   try {
-    const resp = await notion.databases.query({
-      database_id: cfg.notion.projectsDb,
-      filter: { property: 'Github', url: { equals: repoUrl } },
-      page_size: 1
-    });
-    if (resp.results.length > 0) {
-      projectId = resp.results[0].id;
-      const name = resp.results[0].properties?.Name?.title?.[0]?.plain_text;
-      console.log(`[Webhook] Linked to project: ${name || projectId}`);
+    projectId = await findProjectPageByGithubUrl(notion, cfg.notion.projectsDb, repoUrl);
+    if (projectId) {
+      console.log(`[Webhook] Matched project page ${projectId}`);
+    } else {
+      console.warn(
+        `[Webhook] No Projects row for ${repoUrl} — add this repo URL to the **Github** field on a project (normalized matching).`
+      );
     }
   } catch (err) {
     console.error('[Webhook] Project lookup error:', err.message);
@@ -58,6 +50,10 @@ async function handleGitHubWebhook(payload) {
     parent: { database_id: cfg.notion.buildLogsDb },
     properties
   });
+
+  if (projectId) {
+    await appendBuildLogToProject(notion, projectId, created.id);
+  }
 
   console.log(`[Webhook] Build Log created: ${created.id}`);
   return created;
