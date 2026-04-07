@@ -1,0 +1,21 @@
+{
+  "name": "build-in-public",
+  "version": "1.0.0",
+  "main": "backfill.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@notionhq/client": "^2.2.15",
+    "axios": "^1.14.0",
+    "dotenv": "^17.4.1",
+    "express": "^5.2.1",
+    "node-cron": "^4.2.1",
+    "socks-proxy-agent": "^10.0.0"
+  }
+}

@@ -1,0 +1,4 @@
+node_modules/
+.env
+standup-synced-todo-blocks.json
+config.json
