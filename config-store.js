@@ -82,13 +82,17 @@ First section. Next line: :::ai then flowing prose (3–5 sentences max), then :
 Second section. Do NOT wrap this section in :::ai or any fence. Output the items directly as bare "- [ ] …" lines so they render as Notion checkboxes. At most 3 items. Sub-bullets for drafts where needed. **If any ideas are marked "prioritized today" in the idea backlog review, at least one todo must come from or directly support that idea.**
 
 ## 📋 Idea backlog review (full pass)
-Third section, only if IDEA_COUNT is at least 1. Do NOT wrap this section in :::ai or any fence — output everything as bare lines so each renders as its own block. Opening sentence must state the exact IDEA_COUNT from the data block and confirm you are reviewing every listed idea (1/N through N/N). One line per idea in that order: title, status label (see below), one line why.
+Third section, only if IDEA_COUNT is at least 1. Do NOT wrap this section in :::ai or any fence — output everything as bare lines so each renders as its own block. Opening sentence must state the exact IDEA_COUNT from the data block and confirm you are reviewing every listed idea (1/N through N/N). One bullet per idea, emoji first, in this exact format:
+- 🔴 **Idea Title** — prioritized today — one-line reason
+- 🟡 **Idea Title** — worth soon — one-line reason
+- ⚪ **Idea Title** — parked — one-line reason
+- ❌ **Idea Title** — not aligned — one-line reason
 
-Status labels and visual indicators to use:
-- 🔴 **prioritized today** — idea linked to a today-focus project or the highest-leverage thing to act on now
-- 🟡 **worth soon** — valuable but not urgent; pick up in the next few days
-- ⚪ **parked** — low signal or blocked; revisit later
-- ❌ **not aligned** — doesn't fit current focus at all
+Status meanings:
+- 🔴 prioritized today — linked to a today-focus project or highest-leverage thing right now
+- 🟡 worth soon — valuable but not urgent; pick up in the next few days
+- ⚪ parked — low signal or blocked; revisit later
+- ❌ not aligned — doesn't fit current focus at all
 
 **Project scoping rule:** if today's focus projects are known (from PROJECTS data or priority signal), only ideas linked to those projects get 🔴. Ideas linked to non-focus projects should be ⚪ parked or ❌ not aligned unless they are clearly cross-cutting. Do not promote non-focus-project ideas to 🔴 or 🟡 just to fill the list.
 

@@ -61,16 +61,23 @@ function buildWriterPrompt(ctx, task, isHigh) {
     : '\nLENGTH: Short-form only — complete tweet, hook, caption, or mini-thread; avoid filler.\n';
 
   return (
-    'You are ghostwriting for ONE specific person. Your job is to match their voice so closely that a reader could believe they wrote it.\n\n' +
-    'CRITICAL — read the entire "YOUR PUBLISHED CONTENT" section first. That is your Content database: real posts they sent. ' +
-    'Study sentence length, punctuation, humor vs seriousness, emoji use, line breaks, hedging, technical depth, first vs third person, ' +
-    'how they open hooks, and how they sign off. Imitate those patterns—not generic LinkedIn/Twitter "creator" tone, not motivational filler, ' +
-    'not polished consultant-speak. If their examples are messy or casual, yours should be too.\n\n' +
-    'Output rules: produce ONE paste-ready piece for ' +
+    'You are ghostwriting for ONE specific person. Your only job is to sound exactly like them — not like an AI, not like a LinkedIn creator, not like anyone else.\n\n' +
+    'STEP 1 — Read "YOUR PUBLISHED CONTENT" completely before writing anything. These are real posts they actually sent. ' +
+    'Extract and imitate: sentence length, how casual or formal they are, whether they use fragments, how they open (do they hook aggressively or just start talking?), ' +
+    'emoji frequency and placement, line break rhythm, how much they explain vs assume, whether they hedge or state directly, ' +
+    'their humor style, how personal they get. If their posts are short and punchy, yours must be too. If they ramble a bit, yours can too.\n\n' +
+    'STEP 2 — Banned patterns (these make it sound AI-written, avoid them completely):\n' +
+    '- Section headers or subheadings inside the post\n' +
+    '- Bullet point lists (unless their real posts use them frequently)\n' +
+    '- Phrases like "game-changer", "dive deep", "unlock", "leverage", "it\'s not just about X, it\'s about Y", "in today\'s world"\n' +
+    '- Motivational sign-offs like "go build something" or "what are you waiting for"\n' +
+    '- Overly structured "hook → story → CTA" format unless their actual posts use it\n' +
+    '- Starting with a rhetorical question unless they do that themselves\n\n' +
+    'STEP 3 — Write ONE paste-ready piece for ' +
     (task.channel || 'the channel') +
-    '. No preamble ("Sure, here is…"), no meta commentary, no bullet list of tips—only the post text.' +
+    '. No preamble, no meta-commentary, no "here\'s your draft" — just the post itself.' +
     lengthRule +
-    '\n--- YOUR PUBLISHED CONTENT (voice source — prioritize this over everything else) ---\n' +
+    '\n--- YOUR PUBLISHED CONTENT (the only voice that matters) ---\n' +
     ctx.socialText +
     '\n\n--- TASK ---\n' +
     'Channel: ' +
@@ -88,9 +95,9 @@ function buildWriterPrompt(ctx, task, isHigh) {
     'Angle / notes: ' +
     (task.notes || '') +
     '\n\n' +
-    '--- PRIOR STANDUPS (continuity only — do not override voice) ---\n' +
+    '--- PRIOR STANDUPS (context only — do not let this override voice) ---\n' +
     (ctx.recentStandupsText || '(none)') +
-    '\n\n--- WORK CONTEXT (facts only) ---\n' +
+    '\n\n--- WORK CONTEXT (facts to draw from) ---\n' +
     'Build logs:\n' +
     ctx.buildLogsText +
     '\n\nIdeas (IDEA_COUNT=' +

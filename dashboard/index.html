@@ -276,6 +276,21 @@
         </div>
       </div>
 
+      <!-- Today's Blocker / Goal -->
+      <h3>Today's Focus</h3>
+      <div class="card">
+        <div class="card-header" style="margin-bottom:10px">
+          <div>
+            <div class="card-title">What's your biggest blocker or goal today?</div>
+            <div class="card-subtitle">Fed into your standup as {BIGGEST_BLOCKER}. Update this whenever it changes.</div>
+          </div>
+        </div>
+        <textarea id="dashboard-blocker" rows="3" placeholder="Examples: not sure what to do next; shipped a lot but nobody sees it; hard turning builds into content..." style="min-height:unset"></textarea>
+        <div class="btn-row">
+          <button class="btn btn-primary btn-sm" onclick="saveTodayBlocker()">Save</button>
+        </div>
+      </div>
+
       <!-- Recent Activity -->
       <h3>Recent Activity</h3>
       <div class="card" id="recent-log">
@@ -324,11 +339,6 @@
               <input type="text" id="standup-tone" placeholder="e.g. direct and motivating, warm mentor-like, no-nonsense, casual and encouraging...">
               <div class="field-hint">How the AI should write to you. Injected as <code style="font-family:monospace">{WRITING_TONE}</code> in the prompt.</div>
               <div class="checkbox-group" style="margin-top:8px" id="tone-suggestions"></div>
-            </div>
-            <div class="form-group" style="margin-top:16px">
-              <label>Biggest blocker or friction lately</label>
-              <textarea id="standup-blocker" rows="4" placeholder="Examples: not sure what to do next; shipped a lot but nobody sees it; hard turning builds into content..."></textarea>
-              <div class="field-hint">Optional. Fed into the prompt as {BIGGEST_BLOCKER} so the standup addresses what's actually stuck.</div>
             </div>
             <div class="btn-row">
               <button class="btn btn-primary" onclick="saveStandupPreferences()">Save Preferences</button>
@@ -707,7 +717,7 @@ async function loadDashboard() {
       </label>
     `).join('');
 
-    document.getElementById('standup-blocker').value = cfg.standup?.biggestBlocker || '';
+    document.getElementById('dashboard-blocker').value = cfg.standup?.biggestBlocker || '';
 
     // AI provider
     const prov = cfg._runtime?.ai?.provider || 'openai';
@@ -849,11 +859,16 @@ function pickTone(el) {
 
 async function saveStandupPreferences() {
   const checked = [...document.querySelectorAll('#idea-types input:checked')].map(i => i.value);
-  const biggestBlocker = document.getElementById('standup-blocker').value;
   const userNickname = document.getElementById('standup-nickname').value.trim();
   const writingTone = document.getElementById('standup-tone').value.trim();
-  await api('POST', '/api/config', { standup: { ideaTypes: checked, biggestBlocker, userNickname, writingTone } });
+  await api('POST', '/api/config', { standup: { ideaTypes: checked, userNickname, writingTone } });
   showToast('Standup preferences saved!', 'success');
+}
+
+async function saveTodayBlocker() {
+  const biggestBlocker = document.getElementById('dashboard-blocker').value;
+  await api('POST', '/api/config', { standup: { biggestBlocker } });
+  showToast('Saved!', 'success');
 }
 
 async function saveCron() {
