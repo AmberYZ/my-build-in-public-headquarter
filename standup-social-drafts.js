@@ -57,26 +57,40 @@ function parseSocialPlanFromResponse(fullText) {
 
 function buildWriterPrompt(ctx, task, isHigh) {
   var lengthRule = isHigh
-    ? '\nLENGTH: Long-form is OK (essay, script, long thread). Match the format and channel.\n'
-    : '\nLENGTH: SHORT-form only (effort: low). Deliver a complete tweet, hook, short caption, or mini-thread — usually under ~600 words unless the format is a numbered thread. No long essay. No filler.\n';
+    ? '\nLENGTH: Long-form OK (essay, script, thread). Match the channel format.\n'
+    : '\nLENGTH: Short-form only — complete tweet, hook, caption, or mini-thread; avoid filler.\n';
 
   return (
-    'You are a publish-ready social and content writer for someone building in public.\n\n' +
-    'Produce ONE complete deliverable: the full text they can paste into ' +
+    'You are ghostwriting for ONE specific person. Your job is to match their voice so closely that a reader could believe they wrote it.\n\n' +
+    'CRITICAL — read the entire "YOUR PUBLISHED CONTENT" section first. That is your Content database: real posts they sent. ' +
+    'Study sentence length, punctuation, humor vs seriousness, emoji use, line breaks, hedging, technical depth, first vs third person, ' +
+    'how they open hooks, and how they sign off. Imitate those patterns—not generic LinkedIn/Twitter "creator" tone, not motivational filler, ' +
+    'not polished consultant-speak. If their examples are messy or casual, yours should be too.\n\n' +
+    'Output rules: produce ONE paste-ready piece for ' +
     (task.channel || 'the channel') +
-    '. No preamble ("Sure, here is…"), no closing commentary—only the publishable content.' +
+    '. No preamble ("Sure, here is…"), no meta commentary, no bullet list of tips—only the post text.' +
     lengthRule +
-    '\n--- TASK ---\n' +
-    'Channel: ' + (task.channel || '') + '\n' +
-    'Format: ' + (task.format || '') + '\n' +
-    'Goal: ' + (task.goal || '') + '\n' +
-    'Effort: ' + (isHigh ? 'high (long)' : 'low (short)') + '\n' +
-    'Angle / notes: ' + (task.notes || '') + '\n\n' +
-    '--- VOICE (mirror when useful) ---\n' +
+    '\n--- YOUR PUBLISHED CONTENT (voice source — prioritize this over everything else) ---\n' +
     ctx.socialText +
-    '\n\n--- PRIOR STANDUPS (reflection, wins, challenges — use for continuity) ---\n' +
+    '\n\n--- TASK ---\n' +
+    'Channel: ' +
+    (task.channel || '') +
+    '\n' +
+    'Format: ' +
+    (task.format || '') +
+    '\n' +
+    'Goal: ' +
+    (task.goal || '') +
+    '\n' +
+    'Effort: ' +
+    (isHigh ? 'high (long)' : 'low (short)') +
+    '\n' +
+    'Angle / notes: ' +
+    (task.notes || '') +
+    '\n\n' +
+    '--- PRIOR STANDUPS (continuity only — do not override voice) ---\n' +
     (ctx.recentStandupsText || '(none)') +
-    '\n\n--- WORK CONTEXT ---\n' +
+    '\n\n--- WORK CONTEXT (facts only) ---\n' +
     'Build logs:\n' +
     ctx.buildLogsText +
     '\n\nIdeas (IDEA_COUNT=' +
@@ -145,8 +159,15 @@ async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
           '.md';
         var fpath = path.join(DRAFTS_DIR, fname);
         var prompt = buildWriterPrompt(ctxBundle, t, high);
+        var draftTemp =
+          cfg.standup && typeof cfg.standup.socialDraftTemperature === 'number'
+            ? cfg.standup.socialDraftTemperature
+            : 0.55;
         try {
-          var body = await callAi(cfg, prompt, { maxTokens: high ? 4500 : 1800 });
+          var body = await callAi(cfg, prompt, {
+            maxTokens: high ? 4500 : 1800,
+            temperature: draftTemp
+          });
           body = (body || '').trim();
           fs.writeFileSync(fpath, body, 'utf8');
           var url = base + '/social-drafts/' + encodeURIComponent(fname);
@@ -169,11 +190,9 @@ async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
 
   var lines = [];
   lines.push('');
-  lines.push('## 📎 Social drafts (second pass)');
+  lines.push('## Social drafts');
   lines.push('');
-  lines.push(
-    'One file per item in the social plan (short posts = `*_short.md`). Open the URL or read under `social-drafts/` on the server.'
-  );
+  lines.push('One link per planned post (short-form files end with _short). Click the URL to open.');
   lines.push('');
 
   var files = [];
@@ -181,8 +200,17 @@ async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
     var r = results[j];
     if (r.ok) {
       files.push({ path: r.path, url: r.url, fname: r.fname });
-      lines.push('- **' + (r.channel || '') + ' / ' + (r.format || '') + '** — `' + r.fname + '`');
-      lines.push('  - ' + r.url);
+      lines.push(
+        '- **' +
+          (r.channel || '') +
+          ' / ' +
+          (r.format || '') +
+          '** — ' +
+          r.url +
+          ' (' +
+          r.fname +
+          ')'
+      );
       lines.push('');
     } else {
       lines.push('- **' + (r.channel || '') + '** — generation failed: ' + r.error);

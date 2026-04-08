@@ -66,43 +66,144 @@ async function fetchRecentBuildLogs(cfg, days) {
   }
 }
 
+/** Lowercase Status (or State/Stage) select values treated as "idea already done" — excluded from standup backlog. */
+var DEFAULT_IDEA_DONE_STATUSES = ['done', 'completed', 'complete', 'shipped', 'archived', 'closed'];
+
+function ideaDoneStatusLookup(cfg) {
+  var map = {};
+  DEFAULT_IDEA_DONE_STATUSES.forEach(function(s) {
+    map[s] = true;
+  });
+  var extra = cfg.standup && cfg.standup.ideaDoneStatusNames;
+  if (Array.isArray(extra)) {
+    extra.forEach(function(s) {
+      var t = String(s || '')
+        .toLowerCase()
+        .trim();
+      if (t) map[t] = true;
+    });
+  }
+  return map;
+}
+
+/** Checkbox column names (case-insensitive) meaning "this idea is finished". */
+function isIdeaDoneCheckboxPropertyName(name) {
+  var lk = String(name || '')
+    .toLowerCase()
+    .trim();
+  return (
+    lk === 'done' ||
+    lk === 'checked' ||
+    lk === 'complete' ||
+    lk === 'completed' ||
+    lk === 'shipped'
+  );
+}
+
+function isStatusLikeColumnName(name) {
+  var lk = String(name || '')
+    .toLowerCase()
+    .trim();
+  return lk === 'status' || lk === 'state' || lk === 'stage';
+}
+
 /**
- * Idea logs within lookback window (newest first). Paginates until rows are older than `since`
- * so large backlogs (e.g. 12+ ideas) are not truncated at page_size.
+ * Exclude rows that are marked done: Done/Checked/… checkboxes, or Status (etc.) select in the done list.
+ * Set standup.ideaExcludeDone to false to include all rows.
+ */
+function isIdeaRowDone(page, cfg) {
+  if (!page || cfg.standup && cfg.standup.ideaExcludeDone === false) return false;
+  var props = page.properties || {};
+  var doneLookup = ideaDoneStatusLookup(cfg);
+
+  for (var key in props) {
+    var pr = props[key];
+    if (!pr) continue;
+    if (pr.type === 'checkbox' && pr.checkbox === true && isIdeaDoneCheckboxPropertyName(key)) {
+      return true;
+    }
+    if (pr.type === 'select' && pr.select && pr.select.name && isStatusLikeColumnName(key)) {
+      var sn = pr.select.name.toLowerCase().trim();
+      if (doneLookup[sn]) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Idea logs for standup. Default: fetch up to ideaLogMaxRows from the whole Idea Log DB (by last_edited_time)
+ * so every backlog row (e.g. all 12) is included regardless of created date. Optional: lookback mode filters by created_time.
+ * Rows with Done/Checked checkboxes or Status=Done (etc.) are skipped — they are already completed.
  */
 async function fetchRecentIdeaLogs(cfg, days) {
-  if (days == null && cfg.standup && cfg.standup.ideaLogLookbackDays != null) {
-    days = Number(cfg.standup.ideaLogLookbackDays);
-  }
-  if (days == null || isNaN(days) || days < 1) {
-    days = 120;
-  }
-  var since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  var maxRows =
+    cfg.standup && cfg.standup.ideaLogMaxRows != null ? Number(cfg.standup.ideaLogMaxRows) : 200;
+  if (isNaN(maxRows) || maxRows < 1) maxRows = 200;
+  var fetchMode = (cfg.standup && cfg.standup.ideaLogFetchMode) || 'all';
+  if (fetchMode !== 'lookback') fetchMode = 'all';
+
   try {
     var rawPages = [];
-    var cursor = undefined;
-    var stopPaging = false;
-    while (!stopPaging) {
-      var resp = await notion.databases.query({
-        database_id: cfg.notion.ideaLogsDb,
-        page_size: 100,
-        start_cursor: cursor,
-        sorts: [{ timestamp: 'created_time', direction: 'descending' }]
-      });
-      var batch = resp.results || [];
-      for (var i = 0; i < batch.length; i++) {
-        var p = batch[i];
-        if (new Date(p.created_time) >= since) {
-          rawPages.push(p);
-        } else {
-          stopPaging = true;
-          break;
+    if (fetchMode === 'all') {
+      var cursorAll = undefined;
+      var guard = 0;
+      while (rawPages.length < maxRows && guard < 80) {
+        guard++;
+        var respAll = await notion.databases.query({
+          database_id: cfg.notion.ideaLogsDb,
+          page_size: 100,
+          start_cursor: cursorAll,
+          sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }]
+        });
+        var batchAll = respAll.results || [];
+        for (var ai = 0; ai < batchAll.length; ai++) {
+          var pa = batchAll[ai];
+          if (!isIdeaRowDone(pa, cfg)) {
+            rawPages.push(pa);
+            if (rawPages.length >= maxRows) break;
+          }
         }
+        if (!respAll.has_more || batchAll.length === 0) break;
+        cursorAll = respAll.next_cursor;
       }
-      if (!resp.has_more || stopPaging) {
-        break;
+      rawPages = rawPages.slice(0, maxRows);
+    } else {
+      if (days == null && cfg.standup && cfg.standup.ideaLogLookbackDays != null) {
+        days = Number(cfg.standup.ideaLogLookbackDays);
       }
-      cursor = resp.next_cursor;
+      if (days == null || isNaN(days) || days < 1) {
+        days = 120;
+      }
+      var since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      var cursor = undefined;
+      var guardLb = 0;
+      while (rawPages.length < maxRows && guardLb < 80) {
+        guardLb++;
+        var resp = await notion.databases.query({
+          database_id: cfg.notion.ideaLogsDb,
+          page_size: 100,
+          start_cursor: cursor,
+          sorts: [{ timestamp: 'created_time', direction: 'descending' }]
+        });
+        var batch = resp.results || [];
+        if (batch.length === 0) break;
+        var hitOld = false;
+        for (var i = 0; i < batch.length; i++) {
+          var p = batch[i];
+          if (new Date(p.created_time) < since) {
+            hitOld = true;
+            break;
+          }
+          if (!isIdeaRowDone(p, cfg)) {
+            rawPages.push(p);
+            if (rawPages.length >= maxRows) break;
+          }
+        }
+        if (hitOld) break;
+        if (!resp.has_more) break;
+        cursor = resp.next_cursor;
+        if (!cursor) break;
+      }
     }
 
     var mapped = rawPages.map(function(p) {
@@ -194,7 +295,7 @@ function pickSocialDate(props) {
 }
 
 function extractSocialPostBody(props) {
-  var preferred = ['Post', 'Content', 'Body', 'Text', 'Caption', 'Draft'];
+  var preferred = ['Content', 'Post', 'Body', 'Text', 'Caption', 'Draft'];
   for (var i = 0; i < preferred.length; i++) {
     var key = preferred[i];
     if (props[key]) {
@@ -212,18 +313,33 @@ function extractSocialPostBody(props) {
   return longest;
 }
 
-// Published posts (optional DB) — used to learn voice for social drafts
+// Published posts (Content / sent-posts DB) — voice samples for standup + social draft agents
 async function fetchSentSocialPosts(cfg) {
   var dbId = cfg.notion && cfg.notion.socialMediaDb ? String(cfg.notion.socialMediaDb).trim() : '';
   if (!dbId) return [];
 
+  var maxRows =
+    cfg.standup && cfg.standup.socialVoiceSampleMaxRows != null
+      ? Number(cfg.standup.socialVoiceSampleMaxRows)
+      : 60;
+  if (isNaN(maxRows) || maxRows < 1) maxRows = 60;
+
   try {
-    var resp = await notion.databases.query({
-      database_id: dbId,
-      sorts: [{ timestamp: 'created_time', direction: 'descending' }],
-      page_size: 35
-    });
-    var mapped = resp.results.map(function(p) {
+    var rawPages = [];
+    var cursor = undefined;
+    do {
+      var resp = await notion.databases.query({
+        database_id: dbId,
+        page_size: 100,
+        start_cursor: cursor,
+        sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }]
+      });
+      rawPages = rawPages.concat(resp.results || []);
+      cursor = resp.has_more ? resp.next_cursor : undefined;
+    } while (cursor && rawPages.length < maxRows);
+    rawPages = rawPages.slice(0, maxRows);
+
+    var mapped = rawPages.map(function(p) {
       var props = p.properties || {};
       return {
         id: p.id,
@@ -233,7 +349,7 @@ async function fetchSentSocialPosts(cfg) {
         body: extractSocialPostBody(props)
       };
     });
-    return await enrichRowsWithPageBodies(mapped, { maxChars: 2500, maxBlocks: 120 });
+    return await enrichRowsWithPageBodies(mapped, { maxChars: 4500, maxBlocks: 180 });
   } catch (err) {
     console.error('[Standup] Sent social posts fetch error:', err.message);
     return [];
@@ -276,24 +392,63 @@ async function fetchRecentStandupContexts(cfg, excludeDateStr) {
   }
 }
 
+/**
+ * Remove accidental UI legend / color-key lines the model sometimes echoes at the top.
+ */
+function stripUiLegendFromStandupMarkdown(md) {
+  if (!md || typeof md !== 'string') return md;
+  var lines = md.split('\n');
+  while (lines.length) {
+    var raw = lines[0];
+    var t = raw.trim();
+    if (t === '') {
+      lines.shift();
+      continue;
+    }
+    var isLegend =
+      (/Blue\s*=\s*AI/i.test(t) && (/Yellow\s*=\s*your/i.test(t) || /example\.com/i.test(t))) ||
+      /^Blue\s*=\s*AI\s+reasoning/i.test(t) ||
+      /^Yellow\s*=\s*your\s+reflection/i.test(t) ||
+      /Bold\s+text\s+and\s+pasted/i.test(t) ||
+      (/example\.com/i.test(t) && /links?\s+work/i.test(t));
+    if (isLegend) {
+      lines.shift();
+      continue;
+    }
+    break;
+  }
+  return lines.join('\n').trim();
+}
+
 function formatSocialSentForPrompt(rows) {
   if (!rows || rows.length === 0) {
-    return 'No entries yet (add a Sent posts database ID in config, or add rows). When the user logs posts they actually published, drafts should still sound human and specific—not generic.';
+    return 'No rows in the Content / sent-posts database (set notion.socialMediaDb to your Notion database of posts you published). Without real examples, write in a plain human voice—no corporate or "AI influencer" tone.';
   }
-  return rows.map(function(r) {
-    var meta = [];
-    if (r.platform) meta.push(r.platform);
-    if (r.sentDate) meta.push(r.sentDate);
-    var header = meta.length ? ' (' + meta.join(' · ') + ')' : '';
-    var text = (r.body && r.body.trim()) ? r.body : '';
-    if (!text && r.pageBody && r.pageBody.trim()) text = r.pageBody.trim();
-    if (!text) {
-      return '- ' + r.name + header + '\n  (add Post/Content text or page body)';
-    }
-    var oneLine = text.replace(/\s+/g, ' ').trim();
-    if (oneLine.length > 900) oneLine = oneLine.slice(0, 897) + '…';
-    return '- ' + r.name + header + '\n  "' + oneLine + '"';
-  }).join('\n\n');
+  return rows
+    .map(function(r, idx) {
+      var meta = [];
+      if (r.platform) meta.push(r.platform);
+      if (r.sentDate) meta.push(r.sentDate);
+      var header = meta.length ? ' · ' + meta.join(' · ') : '';
+      var text = (r.body && r.body.trim()) ? r.body : '';
+      if (!text && r.pageBody && r.pageBody.trim()) text = r.pageBody.trim();
+      if (!text) {
+        return (
+          '--- EXAMPLE ' +
+          (idx + 1) +
+          ' (no body — add Post/Content or page body in Notion) — ' +
+          r.name +
+          header +
+          ' ---\n(empty)'
+        );
+      }
+      var limit = 3600;
+      if (text.length > limit) {
+        text = text.slice(0, limit - 1) + '…';
+      }
+      return '--- EXAMPLE ' + (idx + 1) + ' (your published content)' + header + ' — ' + r.name + ' ---\n' + text;
+    })
+    .join('\n\n');
 }
 
 function indentPrefixed(text, prefix) {
@@ -335,16 +490,38 @@ function buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSen
       : 120;
   if (isNaN(lookbackDays) || lookbackDays < 1) lookbackDays = 120;
 
+  var ideaMaxRows =
+    cfg.standup && cfg.standup.ideaLogMaxRows != null ? Number(cfg.standup.ideaLogMaxRows) : 200;
+  if (isNaN(ideaMaxRows) || ideaMaxRows < 1) ideaMaxRows = 200;
+
+  var fetchMode = (cfg.standup && cfg.standup.ideaLogFetchMode) || 'all';
+  if (fetchMode !== 'lookback') fetchMode = 'all';
+
+  var doneFilterNote =
+    cfg.standup && cfg.standup.ideaExcludeDone === false
+      ? ''
+      : ' **Done ideas are omitted:** rows with a Done/Checked/Complete (or similar) checkbox checked, or Status/State/Stage select set to Done/Completed/etc., are not listed — they are treated as finished.';
+
+  var ideaFetchBlurb =
+    (fetchMode === 'all'
+      ? 'Fetch mode: **all** — up to ' +
+        ideaMaxRows +
+        ' **open** ideas from the Idea Log database (sorted by last edited time). This should include your active backlog unless you have more than ' +
+        ideaMaxRows +
+        ' open rows — then raise ideaLogMaxRows in config.'
+      : 'Fetch mode: **lookback** — only ideas **created** in the last ' +
+        lookbackDays +
+        ' days (still excluding done rows). Older ideas are omitted unless you switch ideaLogFetchMode to "all".') +
+    doneFilterNote;
+
   var ideaLogsText = ideaLogs.length === 0
-    ? 'IDEA_COUNT: 0 — No idea rows in this lookback window. LOOKBACK_DAYS: ' +
-      lookbackDays +
-      '. If the user has more ideas in Notion that are older than this window, mention that limitation in transparency (they can raise ideaLogLookbackDays in config). Omit "## 📋 Idea backlog review" or keep one line explaining zero rows.'
+    ? 'IDEA_COUNT: 0 — No rows returned from the Idea Log database (empty DB or wrong database ID).\n' +
+      ideaFetchBlurb
     : 'IDEA_COUNT: ' +
       ideaLogs.length +
-      ' — You must include every one in "## 📋 Idea backlog review (full pass)" with a status line.\n' +
-      'LOOKBACK_DAYS: ' +
-      lookbackDays +
-      ' (idea rows created within this window).\n\n' +
+      ' — List **every** idea below in "## 📋 Idea backlog review (full pass)" with a status line.\n' +
+      ideaFetchBlurb +
+      '\n\n' +
       ideaLogs
         .map(function(i, idx) {
           var cat = i.category || 'General';
@@ -377,6 +554,8 @@ function buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSen
     ideaLogsText: ideaLogsText,
     ideaCount: ideaLogs.length,
     ideaLookbackDays: lookbackDays,
+    ideaMaxRows: ideaMaxRows,
+    ideaFetchBlurb: ideaFetchBlurb,
     ideaTypesStr: ideaTypesStr,
     blockerText: blockerText,
     projectsText: projectsText,
@@ -393,6 +572,8 @@ function buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent, recentStand
     .replace('{IDEA_LOGS}', ctx.ideaLogsText)
     .replace('{IDEA_COUNT}', String(ctx.ideaCount != null ? ctx.ideaCount : 0))
     .replace('{IDEA_LOOKBACK_DAYS}', String(ctx.ideaLookbackDays != null ? ctx.ideaLookbackDays : 120))
+    .replace('{IDEA_MAX_ROWS}', String(ctx.ideaMaxRows != null ? ctx.ideaMaxRows : 200))
+    .replace('{IDEA_FETCH_BLURB}', ctx.ideaFetchBlurb || '')
     .replace('{IDEA_TYPES}', ctx.ideaTypesStr)
     .replace('{PROJECTS}', ctx.projectsText)
     .replace('{BIGGEST_BLOCKER}', ctx.blockerText)
@@ -416,11 +597,13 @@ function lineToTodoBlock(line) {
   var mdTodo = trimmed.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
   if (mdTodo) {
     var checkedMd = mdTodo[1].trim().toLowerCase() === 'x';
+    var todoRt = parseMarkdownInlineToRichText(mdTodo[2].trim());
+    if (!todoRt.length) todoRt = [{ type: 'text', text: { content: mdTodo[2].trim() } }];
     return {
       object: 'block',
       type: 'to_do',
       to_do: {
-        rich_text: [{ type: 'text', text: { content: mdTodo[2].trim() } }],
+        rich_text: todoRt,
         checked: checkedMd
       }
     };
@@ -428,11 +611,13 @@ function lineToTodoBlock(line) {
   var plainTodo = trimmed.match(/^\[([ xX])\]\s+(.+)$/);
   if (plainTodo) {
     var checkedPl = plainTodo[1].trim().toLowerCase() === 'x';
+    var todoRt2 = parseMarkdownInlineToRichText(plainTodo[2].trim());
+    if (!todoRt2.length) todoRt2 = [{ type: 'text', text: { content: plainTodo[2].trim() } }];
     return {
       object: 'block',
       type: 'to_do',
       to_do: {
-        rich_text: [{ type: 'text', text: { content: plainTodo[2].trim() } }],
+        rich_text: todoRt2,
         checked: checkedPl
       }
     };
@@ -455,25 +640,79 @@ function splitRichTextChunks(s) {
 }
 
 /**
+ * Markdown-ish inline → Notion rich_text: **bold** and bare https:// URLs (clickable).
+ */
+function parseMarkdownInlineToRichText(str) {
+  str = String(str || '');
+  if (!str) return [];
+
+  function pushTextChunks(content, bold, isLink) {
+    if (!content) return [];
+    var chunks = splitRichTextChunks(content);
+    return chunks.map(function(c) {
+      var item = { type: 'text', text: { content: c } };
+      if (isLink) {
+        item.text.link = { url: c };
+      }
+      if (bold) {
+        item.annotations = { bold: true };
+      }
+      return item;
+    });
+  }
+
+  function splitUrlsInSegment(segment, bold) {
+    if (!segment) return [];
+    var out = [];
+    var urlRe = /(https?:\/\/[^\s<>\]"']+)/gi;
+    var last = 0;
+    var m;
+    while ((m = urlRe.exec(segment)) !== null) {
+      if (m.index > last) {
+        out = out.concat(pushTextChunks(segment.slice(last, m.index), bold, false));
+      }
+      out = out.concat(pushTextChunks(m[1], bold, true));
+      last = m.index + m[0].length;
+    }
+    if (last < segment.length) {
+      out = out.concat(pushTextChunks(segment.slice(last), bold, false));
+    }
+    return out;
+  }
+
+  var parts = str.split(/\*\*/);
+  var out = [];
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i] === undefined) continue;
+    var bold = i % 2 === 1;
+    out = out.concat(splitUrlsInSegment(parts[i], bold));
+  }
+  return out;
+}
+
+function makeCalloutBlock(kind, richTextArray) {
+  var isYou = kind === 'you';
+  return {
+    object: 'block',
+    type: 'callout',
+    callout: {
+      rich_text: richTextArray,
+      icon: { emoji: isYou ? '✍️' : '🤖' },
+      color: isYou ? 'yellow_background' : 'blue_background'
+    }
+  };
+}
+
+/**
  * Colored callouts: blue = AI reasoning, yellow = user input / reflection.
- * Long bodies split into sibling callouts (same color) to stay within Notion rich_text limits.
+ * Parses **bold** and https:// links.
  */
 function calloutBlocksFromBody(kind, bodyText) {
   var text = String(bodyText || '').trim();
   if (!text) return [];
-  var isYou = kind === 'you';
-  var chunks = splitRichTextChunks(text);
-  return chunks.map(function(chunk) {
-    return {
-      object: 'block',
-      type: 'callout',
-      callout: {
-        rich_text: [{ type: 'text', text: { content: chunk } }],
-        icon: { emoji: isYou ? '✍️' : '🤖' },
-        color: isYou ? 'yellow_background' : 'blue_background'
-      }
-    };
-  });
+  var segments = parseMarkdownInlineToRichText(text);
+  if (!segments.length) return [];
+  return [makeCalloutBlock(kind, segments)];
 }
 
 // Parse AI markdown content into Notion blocks (including real to_do checkboxes)
@@ -531,10 +770,12 @@ function parseContentToBlocks(content) {
     // Heading 1
     if (line.charAt(0) === '#' && line.charAt(1) === ' ' && line.charAt(2) !== '#') {
       flushParagraph();
+      var h1 = parseMarkdownInlineToRichText(line.replace(/^# /, ''));
+      if (!h1.length) h1 = [{ type: 'text', text: { content: line.replace(/^# /, '') } }];
       blocks.push({
         object: 'block',
         type: 'heading_1',
-        heading_1: { rich_text: [{ type: 'text', text: { content: line.replace(/^# /, '') } }] }
+        heading_1: { rich_text: h1 }
       });
       continue;
     }
@@ -542,10 +783,12 @@ function parseContentToBlocks(content) {
     // Heading 2
     if (line.charAt(0) === '#' && line.charAt(1) === '#' && line.charAt(2) === ' ' && line.charAt(3) !== '#') {
       flushParagraph();
+      var h2 = parseMarkdownInlineToRichText(line.replace(/^## /, ''));
+      if (!h2.length) h2 = [{ type: 'text', text: { content: line.replace(/^## /, '') } }];
       blocks.push({
         object: 'block',
         type: 'heading_2',
-        heading_2: { rich_text: [{ type: 'text', text: { content: line.replace(/^## /, '') } }] }
+        heading_2: { rich_text: h2 }
       });
       continue;
     }
@@ -553,10 +796,12 @@ function parseContentToBlocks(content) {
     // Heading 3
     if (line.indexOf('### ') === 0) {
       flushParagraph();
+      var h3 = parseMarkdownInlineToRichText(line.replace(/^### /, ''));
+      if (!h3.length) h3 = [{ type: 'text', text: { content: line.replace(/^### /, '') } }];
       blocks.push({
         object: 'block',
         type: 'heading_3',
-        heading_3: { rich_text: [{ type: 'text', text: { content: line.replace(/^### /, '') } }] }
+        heading_3: { rich_text: h3 }
       });
       continue;
     }
@@ -580,12 +825,12 @@ function parseContentToBlocks(content) {
     var subBullet = line.match(/^(\s{2,})[-*]\s+(.+)$/);
     if (subBullet && !/^\[[ xX]\]/.test(subBullet[2].trim())) {
       flushParagraph();
+      var subRt = parseMarkdownInlineToRichText('        • ' + subBullet[2].trim());
+      if (!subRt.length) subRt = [{ type: 'text', text: { content: '        • ' + subBullet[2].trim() } }];
       blocks.push({
         object: 'block',
         type: 'paragraph',
-        paragraph: {
-          rich_text: [{ type: 'text', text: { content: '        • ' + subBullet[2].trim() } }]
-        }
+        paragraph: { rich_text: subRt }
       });
       continue;
     }
@@ -594,10 +839,12 @@ function parseContentToBlocks(content) {
     var numItem = line.match(/^(\d+)\.\s+(.+)$/);
     if (numItem) {
       flushParagraph();
+      var numRt = parseMarkdownInlineToRichText(numItem[2].trim());
+      if (!numRt.length) numRt = [{ type: 'text', text: { content: numItem[2].trim() } }];
       blocks.push({
         object: 'block',
         type: 'numbered_list_item',
-        numbered_list_item: { rich_text: [{ type: 'text', text: { content: numItem[2].trim() } }] }
+        numbered_list_item: { rich_text: numRt }
       });
       continue;
     }
@@ -605,10 +852,12 @@ function parseContentToBlocks(content) {
     // Bulleted list (not task)
     if (line.match(/^[-*] /)) {
       flushParagraph();
+      var bulRt = parseMarkdownInlineToRichText(line.replace(/^[-*] /, ''));
+      if (!bulRt.length) bulRt = [{ type: 'text', text: { content: line.replace(/^[-*] /, '') } }];
       blocks.push({
         object: 'block',
         type: 'bulleted_list_item',
-        bulleted_list_item: { rich_text: [{ type: 'text', text: { content: line.replace(/^[-*] /, '') } }] }
+        bulleted_list_item: { rich_text: bulRt }
       });
       continue;
     }
@@ -619,8 +868,11 @@ function parseContentToBlocks(content) {
       continue;
     }
 
-    // Regular text
-    currentParagraph.push({ type: 'text', text: { content: line } });
+    // Regular text (merge lines with newline; **bold** and URLs parsed)
+    if (currentParagraph.length > 0) {
+      currentParagraph.push({ type: 'text', text: { content: '\n' } });
+    }
+    currentParagraph = currentParagraph.concat(parseMarkdownInlineToRichText(line));
   }
 
   flushParagraph();
@@ -731,31 +983,7 @@ async function todaysStandupExists(cfg, dateStr) {
 }
 
 function buildStandupChildren(content) {
-  var parsedBlocks = parseContentToBlocks(content);
-  return [
-    {
-      object: 'block',
-      type: 'callout',
-      callout: {
-        rich_text: [
-          {
-            type: 'text',
-            text: {
-              content:
-                'Blue callouts = AI reasoning & drafts. Yellow = your reflection (answer there). Headings and bullets follow below.'
-            }
-          }
-        ],
-        icon: { emoji: '📋' },
-        color: 'gray_background'
-      }
-    },
-    {
-      object: 'block',
-      type: 'divider',
-      divider: {}
-    }
-  ].concat(parsedBlocks);
+  return parseContentToBlocks(content);
 }
 
 // Create a daily standup as a new row in the standup database
@@ -812,7 +1040,15 @@ async function generateStandup(opts) {
 
   console.log('[Standup] Fetching Idea Logs...');
   var ideaLogs = await fetchRecentIdeaLogs(cfg, null);
-  console.log('[Standup] Found ' + ideaLogs.length + ' idea logs (lookback days: ' + (cfg.standup && cfg.standup.ideaLogLookbackDays != null ? cfg.standup.ideaLogLookbackDays : 120) + ')');
+  console.log(
+    '[Standup] Found ' +
+      ideaLogs.length +
+      ' idea logs (mode: ' +
+      ((cfg.standup && cfg.standup.ideaLogFetchMode) || 'all') +
+      ', maxRows: ' +
+      (cfg.standup && cfg.standup.ideaLogMaxRows != null ? cfg.standup.ideaLogMaxRows : 200) +
+      ')'
+  );
 
   console.log('[Standup] Fetching Projects...');
   var projects = await fetchProjects(cfg);
@@ -849,7 +1085,7 @@ async function generateStandup(opts) {
   }
 
   var parsed = parseSocialPlanFromResponse(aiContent);
-  var standupMarkdown = parsed.markdown;
+  var standupMarkdown = stripUiLegendFromStandupMarkdown(parsed.markdown);
   var draftAppend = '';
   var draftFiles = [];
   if (parsed.tasks && parsed.tasks.length) {
@@ -918,4 +1154,9 @@ if (require.main === module) {
     .catch(function(e) { console.error(e); process.exit(1); });
 }
 
-module.exports = { generateStandup, parseContentToBlocks, buildStandupContextBundle };
+module.exports = {
+  generateStandup,
+  parseContentToBlocks,
+  buildStandupContextBundle,
+  stripUiLegendFromStandupMarkdown: stripUiLegendFromStandupMarkdown
+};

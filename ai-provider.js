@@ -137,6 +137,7 @@ async function callAnthropic(ai, prompt, maxTokensOverride) {
     {
       model: ai.model,
       max_tokens: maxTokensOverride || ai.maxTokens,
+      temperature: typeof ai.temperature === 'number' ? ai.temperature : 0.7,
       messages: [{ role: 'user', content: prompt }]
     },
     netOpts({
@@ -184,9 +185,13 @@ async function callGemini(ai, prompt, maxTokensOverride) {
 }
 
 async function callAi(cfg, prompt, opts) {
-  const ai = normalizeAiConfig(cfg);
+  opts = opts || {};
+  const aiBase = normalizeAiConfig(cfg);
+  const maxTokens = opts.maxTokens ? opts.maxTokens : undefined;
+  const temp =
+    typeof opts.temperature === 'number' && !isNaN(opts.temperature) ? opts.temperature : null;
+  const ai = temp != null ? Object.assign({}, aiBase, { temperature: temp }) : aiBase;
   const provider = ai.provider;
-  const maxTokens = opts && opts.maxTokens ? opts.maxTokens : undefined;
 
   if (provider === 'minimax') return callMiniMax(ai, prompt, maxTokens);
   if (provider === 'openai') return callOpenAiCompatible(ai, prompt, maxTokens);
