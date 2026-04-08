@@ -207,6 +207,81 @@ app.post('/api/standup/test-ai', async (req, res) => {
   }
 });
 
+// ─── API: Dashboard Stats ─────────────────────────────────────────────────────
+app.get('/api/dashboard/stats', async (req, res) => {
+  const { Client } = require('@notionhq/client');
+  const notion = new Client({ auth: process.env.NOTION_API_KEY });
+  const freshCfg = load();
+  const nCfg = freshCfg.notion || {};
+
+  async function countDb(dbId, filter) {
+    if (!dbId) return null;
+    try {
+      let count = 0;
+      let cursor;
+      do {
+        const params = { database_id: dbId, page_size: 100 };
+        if (filter) params.filter = filter;
+        if (cursor) params.start_cursor = cursor;
+        const r = await notion.databases.query(params);
+        count += r.results.length;
+        cursor = r.has_more ? r.next_cursor : null;
+      } while (cursor);
+      return count;
+    } catch { return null; }
+  }
+
+  // Count projects by status
+  async function countProjectsByStatus(dbId) {
+    if (!dbId) return {};
+    try {
+      const statusCounts = {};
+      let cursor;
+      do {
+        const params = { database_id: dbId, page_size: 100 };
+        if (cursor) params.start_cursor = cursor;
+        const r = await notion.databases.query(params);
+        for (const page of r.results) {
+          // Try common status/stage property names
+          const props = page.properties || {};
+          const statusProp = props['Status'] || props['Stage'] || props['status'] || props['stage'];
+          let statusVal = 'Unknown';
+          if (statusProp) {
+            if (statusProp.type === 'select' && statusProp.select) {
+              statusVal = statusProp.select.name || 'Unknown';
+            } else if (statusProp.type === 'status' && statusProp.status) {
+              statusVal = statusProp.status.name || 'Unknown';
+            }
+          }
+          statusCounts[statusVal] = (statusCounts[statusVal] || 0) + 1;
+        }
+        cursor = r.has_more ? r.next_cursor : null;
+      } while (cursor);
+      return statusCounts;
+    } catch { return {}; }
+  }
+
+  try {
+    const [totalProjects, projectsByStatus, totalBuildLogs, totalIdeas, totalStandups] = await Promise.all([
+      countDb(nCfg.projectsDb),
+      countProjectsByStatus(nCfg.projectsDb),
+      countDb(nCfg.buildLogsDb),
+      countDb(nCfg.ideaLogsDb),
+      countDb(nCfg.standupDb)
+    ]);
+
+    res.json({
+      totalProjects,
+      projectsByStatus,
+      totalBuildLogs,
+      totalIdeas,
+      totalStandups
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── API: GitHub ─────────────────────────────────────────────────────────────
 app.post('/api/github/backfill', async (req, res) => {
   try {
