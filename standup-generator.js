@@ -66,18 +66,46 @@ async function fetchRecentBuildLogs(cfg, days) {
   }
 }
 
-// Fetch recent Idea Logs from Notion
+/**
+ * Idea logs within lookback window (newest first). Paginates until rows are older than `since`
+ * so large backlogs (e.g. 12+ ideas) are not truncated at page_size.
+ */
 async function fetchRecentIdeaLogs(cfg, days) {
-  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  if (days == null && cfg.standup && cfg.standup.ideaLogLookbackDays != null) {
+    days = Number(cfg.standup.ideaLogLookbackDays);
+  }
+  if (days == null || isNaN(days) || days < 1) {
+    days = 120;
+  }
+  var since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
   try {
-    const resp = await notion.databases.query({
-      database_id: cfg.notion.ideaLogsDb,
-      page_size: 50
-    });
-    const mapped = resp.results
-      .filter(function(p) { return new Date(p.created_time) >= since; })
-      .sort(function(a, b) { return new Date(b.created_time) - new Date(a.created_time); })
-      .map(function(p) {
+    var rawPages = [];
+    var cursor = undefined;
+    var stopPaging = false;
+    while (!stopPaging) {
+      var resp = await notion.databases.query({
+        database_id: cfg.notion.ideaLogsDb,
+        page_size: 100,
+        start_cursor: cursor,
+        sorts: [{ timestamp: 'created_time', direction: 'descending' }]
+      });
+      var batch = resp.results || [];
+      for (var i = 0; i < batch.length; i++) {
+        var p = batch[i];
+        if (new Date(p.created_time) >= since) {
+          rawPages.push(p);
+        } else {
+          stopPaging = true;
+          break;
+        }
+      }
+      if (!resp.has_more || stopPaging) {
+        break;
+      }
+      cursor = resp.next_cursor;
+    }
+
+    var mapped = rawPages.map(function(p) {
       return {
         id: p.id,
         name: (p.properties.Name && p.properties.Name.title && p.properties.Name.title[0] ? p.properties.Name.title[0].plain_text : 'Untitled'),
@@ -212,6 +240,42 @@ async function fetchSentSocialPosts(cfg) {
   }
 }
 
+/** Prior standup pages (same DB) — full page text for reflection continuity & social angles. */
+async function fetchRecentStandupContexts(cfg, excludeDateStr) {
+  var dbId = getStandupDbId(cfg);
+  if (!dbId) {
+    return 'Standup database not configured.';
+  }
+  try {
+    var resp = await notion.databases.query({
+      database_id: dbId,
+      sorts: [{ timestamp: 'created_time', direction: 'descending' }],
+      page_size: 12
+    });
+    var results = resp.results || [];
+    var chunks = [];
+    for (var i = 0; i < results.length; i++) {
+      var p = results[i];
+      var title = pageTitleFromProperties(p);
+      if (excludeDateStr && title.indexOf(excludeDateStr) !== -1) {
+        continue;
+      }
+      var body = await fetchPageBodyPlainText(notion, p.id, { maxChars: 4000, maxBlocks: 150 });
+      chunks.push('### ' + title + '\n' + body);
+      if (chunks.length >= 4) {
+        break;
+      }
+    }
+    if (chunks.length === 0) {
+      return 'No prior standup pages yet (first run) or only today\'s page exists.';
+    }
+    return chunks.join('\n\n---\n\n');
+  } catch (err) {
+    console.error('[Standup] Recent standups context error:', err.message);
+    return '';
+  }
+}
+
 function formatSocialSentForPrompt(rows) {
   if (!rows || rows.length === 0) {
     return 'No entries yet (add a Sent posts database ID in config, or add rows). When the user logs posts they actually published, drafts should still sound human and specific—not generic.';
@@ -253,7 +317,7 @@ function formatProjectsForPrompt(projects) {
 }
 
 /** Shared context strings for main standup prompt and social draft agents. */
-function buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSent) {
+function buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSent, recentStandupsText) {
   var buildLogsText = buildLogs.length === 0
     ? 'No builds logged recently.'
     : buildLogs.map(function(b) {
@@ -265,17 +329,33 @@ function buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSen
         return '[' + date + '] ' + b.name + (b.source ? ' (' + b.source + ')' : '') + detail + body;
       }).join('\n\n');
 
+  var lookbackDays =
+    cfg.standup && cfg.standup.ideaLogLookbackDays != null
+      ? Number(cfg.standup.ideaLogLookbackDays)
+      : 120;
+  if (isNaN(lookbackDays) || lookbackDays < 1) lookbackDays = 120;
+
   var ideaLogsText = ideaLogs.length === 0
-    ? 'No ideas logged recently.'
-    : ideaLogs.map(function(i) {
-        var cat = i.category || 'General';
-        var det = i.details ? '\n  Properties (Details): ' + i.details : '';
-        var stat = i.status ? ' (' + i.status + ')' : '';
-        var body = i.pageBody && i.pageBody.trim()
-          ? '\n  Page content:\n' + indentPrefixed(i.pageBody, '    ')
-          : '';
-        return '[' + cat + '] ' + i.name + det + stat + body;
-      }).join('\n\n');
+    ? 'IDEA_COUNT: 0 — No idea rows in this lookback window. LOOKBACK_DAYS: ' +
+      lookbackDays +
+      '. If the user has more ideas in Notion that are older than this window, mention that limitation in transparency (they can raise ideaLogLookbackDays in config). Omit "## 📋 Idea backlog review" or keep one line explaining zero rows.'
+    : 'IDEA_COUNT: ' +
+      ideaLogs.length +
+      ' — You must include every one in "## 📋 Idea backlog review (full pass)" with a status line.\n' +
+      'LOOKBACK_DAYS: ' +
+      lookbackDays +
+      ' (idea rows created within this window).\n\n' +
+      ideaLogs
+        .map(function(i, idx) {
+          var cat = i.category || 'General';
+          var det = i.details ? '\n  Properties (Details): ' + i.details : '';
+          var stat = i.status ? ' (' + i.status + ')' : '';
+          var body = i.pageBody && i.pageBody.trim()
+            ? '\n  Page content:\n' + indentPrefixed(i.pageBody, '    ')
+            : '';
+          return '(' + (idx + 1) + '/' + ideaLogs.length + ') [' + cat + '] ' + i.name + det + stat + body;
+        })
+        .join('\n\n');
 
   var ideaTypesStr = (cfg.standup.ideaTypes || []).length
     ? (cfg.standup.ideaTypes || []).join(', ')
@@ -288,26 +368,43 @@ function buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSen
 
   var socialText = formatSocialSentForPrompt(socialSent || []);
 
+  var recent = recentStandupsText && String(recentStandupsText).trim()
+    ? String(recentStandupsText).trim()
+    : 'No prior standup pages loaded.';
+
   return {
     buildLogsText: buildLogsText,
     ideaLogsText: ideaLogsText,
+    ideaCount: ideaLogs.length,
+    ideaLookbackDays: lookbackDays,
     ideaTypesStr: ideaTypesStr,
     blockerText: blockerText,
     projectsText: projectsText,
-    socialText: socialText
+    socialText: socialText,
+    recentStandupsText: recent
   };
 }
 
 // Build the prompt by substituting data into the template
-function buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent) {
-  var ctx = buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSent);
+function buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent, recentStandupsText) {
+  var ctx = buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSent, recentStandupsText);
   var prompt = cfg.standup.prompt
     .replace('{BUILD_LOGS}', ctx.buildLogsText)
     .replace('{IDEA_LOGS}', ctx.ideaLogsText)
+    .replace('{IDEA_COUNT}', String(ctx.ideaCount != null ? ctx.ideaCount : 0))
+    .replace('{IDEA_LOOKBACK_DAYS}', String(ctx.ideaLookbackDays != null ? ctx.ideaLookbackDays : 120))
     .replace('{IDEA_TYPES}', ctx.ideaTypesStr)
     .replace('{PROJECTS}', ctx.projectsText)
     .replace('{BIGGEST_BLOCKER}', ctx.blockerText)
     .replace('{SOCIAL_SENT_POSTS}', ctx.socialText);
+
+  if (prompt.indexOf('{RECENT_STANDUPS_CONTEXT}') !== -1) {
+    prompt = prompt.replace('{RECENT_STANDUPS_CONTEXT}', ctx.recentStandupsText);
+  } else {
+    prompt +=
+      '\n\n📓 PRIOR STANDUPS (full page text — includes past Daily reflection):\n' +
+      ctx.recentStandupsText;
+  }
 
   return prompt;
 }
@@ -315,7 +412,8 @@ function buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent) {
 var NOTION_BLOCK_BATCH = 100;
 
 function lineToTodoBlock(line) {
-  var mdTodo = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
+  var trimmed = String(line || '').replace(/^\s+/, '');
+  var mdTodo = trimmed.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
   if (mdTodo) {
     var checkedMd = mdTodo[1].trim().toLowerCase() === 'x';
     return {
@@ -327,7 +425,7 @@ function lineToTodoBlock(line) {
       }
     };
   }
-  var plainTodo = line.match(/^\[([ xX])\]\s+(.+)$/);
+  var plainTodo = trimmed.match(/^\[([ xX])\]\s+(.+)$/);
   if (plainTodo) {
     var checkedPl = plainTodo[1].trim().toLowerCase() === 'x';
     return {
@@ -342,11 +440,49 @@ function lineToTodoBlock(line) {
   return null;
 }
 
+var NOTION_RICH_TEXT_MAX = 2000;
+
+/** Split plain text into Notion-safe segments (max 2000 chars each). */
+function splitRichTextChunks(s) {
+  s = String(s || '');
+  var out = [];
+  var i = 0;
+  while (i < s.length) {
+    out.push(s.slice(i, i + NOTION_RICH_TEXT_MAX));
+    i += NOTION_RICH_TEXT_MAX;
+  }
+  return out.length ? out : [''];
+}
+
+/**
+ * Colored callouts: blue = AI reasoning, yellow = user input / reflection.
+ * Long bodies split into sibling callouts (same color) to stay within Notion rich_text limits.
+ */
+function calloutBlocksFromBody(kind, bodyText) {
+  var text = String(bodyText || '').trim();
+  if (!text) return [];
+  var isYou = kind === 'you';
+  var chunks = splitRichTextChunks(text);
+  return chunks.map(function(chunk) {
+    return {
+      object: 'block',
+      type: 'callout',
+      callout: {
+        rich_text: [{ type: 'text', text: { content: chunk } }],
+        icon: { emoji: isYou ? '✍️' : '🤖' },
+        color: isYou ? 'yellow_background' : 'blue_background'
+      }
+    };
+  });
+}
+
 // Parse AI markdown content into Notion blocks (including real to_do checkboxes)
 function parseContentToBlocks(content) {
   var lines = content.split('\n');
   var blocks = [];
   var currentParagraph = [];
+  var calloutMode = null;
+  var calloutBuf = [];
 
   function flushParagraph() {
     if (currentParagraph.length > 0) {
@@ -355,8 +491,42 @@ function parseContentToBlocks(content) {
     }
   }
 
+  function flushCallout() {
+    if (!calloutMode) return;
+    var body = calloutBuf.join('\n');
+    calloutBuf = [];
+    var mode = calloutMode;
+    calloutMode = null;
+    var parts = calloutBlocksFromBody(mode, body);
+    for (var pi = 0; pi < parts.length; pi++) {
+      blocks.push(parts[pi]);
+    }
+  }
+
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
+
+    if (/^:::ai\s*$/.test(line)) {
+      flushParagraph();
+      flushCallout();
+      calloutMode = 'ai';
+      continue;
+    }
+    if (/^:::you\s*$/.test(line)) {
+      flushParagraph();
+      flushCallout();
+      calloutMode = 'you';
+      continue;
+    }
+    if (/^:::\s*$/.test(line)) {
+      flushParagraph();
+      flushCallout();
+      continue;
+    }
+    if (calloutMode) {
+      calloutBuf.push(line);
+      continue;
+    }
 
     // Heading 1
     if (line.charAt(0) === '#' && line.charAt(1) === ' ' && line.charAt(2) !== '#') {
@@ -391,11 +561,44 @@ function parseContentToBlocks(content) {
       continue;
     }
 
+    // Horizontal rule
+    if (/^---+\s*$/.test(line.trim())) {
+      flushParagraph();
+      blocks.push({ object: 'block', type: 'divider', divider: {} });
+      continue;
+    }
+
     // Task list → Notion to_do (before generic bullets)
     var todoBlock = lineToTodoBlock(line);
     if (todoBlock) {
       flushParagraph();
       blocks.push(todoBlock);
+      continue;
+    }
+
+    // Indented sub-bullets (visual hierarchy) — not checkboxes (those handled as todos above)
+    var subBullet = line.match(/^(\s{2,})[-*]\s+(.+)$/);
+    if (subBullet && !/^\[[ xX]\]/.test(subBullet[2].trim())) {
+      flushParagraph();
+      blocks.push({
+        object: 'block',
+        type: 'paragraph',
+        paragraph: {
+          rich_text: [{ type: 'text', text: { content: '        • ' + subBullet[2].trim() } }]
+        }
+      });
+      continue;
+    }
+
+    // Numbered list
+    var numItem = line.match(/^(\d+)\.\s+(.+)$/);
+    if (numItem) {
+      flushParagraph();
+      blocks.push({
+        object: 'block',
+        type: 'numbered_list_item',
+        numbered_list_item: { rich_text: [{ type: 'text', text: { content: numItem[2].trim() } }] }
+      });
       continue;
     }
 
@@ -421,6 +624,7 @@ function parseContentToBlocks(content) {
   }
 
   flushParagraph();
+  flushCallout();
   return blocks;
 }
 
@@ -533,8 +737,16 @@ function buildStandupChildren(content) {
       object: 'block',
       type: 'callout',
       callout: {
-        rich_text: [{ type: 'text', text: { content: '[AI-generated] Edit freely before sharing' } }],
-        icon: { emoji: '🤖' },
+        rich_text: [
+          {
+            type: 'text',
+            text: {
+              content:
+                'Blue callouts = AI reasoning & drafts. Yellow = your reflection (answer there). Headings and bullets follow below.'
+            }
+          }
+        ],
+        icon: { emoji: '📋' },
         color: 'gray_background'
       }
     },
@@ -599,8 +811,8 @@ async function generateStandup(opts) {
   console.log('[Standup] Found ' + buildLogs.length + ' build logs');
 
   console.log('[Standup] Fetching Idea Logs...');
-  var ideaLogs = await fetchRecentIdeaLogs(cfg, 14);
-  console.log('[Standup] Found ' + ideaLogs.length + ' idea logs');
+  var ideaLogs = await fetchRecentIdeaLogs(cfg, null);
+  console.log('[Standup] Found ' + ideaLogs.length + ' idea logs (lookback days: ' + (cfg.standup && cfg.standup.ideaLogLookbackDays != null ? cfg.standup.ideaLogLookbackDays : 120) + ')');
 
   console.log('[Standup] Fetching Projects...');
   var projects = await fetchProjects(cfg);
@@ -610,9 +822,13 @@ async function generateStandup(opts) {
   var socialSent = await fetchSentSocialPosts(cfg);
   console.log('[Standup] Found ' + socialSent.length + ' sent social posts');
 
+  console.log('[Standup] Fetching recent standups (reflection & continuity)...');
+  var recentStandupsText = await fetchRecentStandupContexts(cfg, dateStr);
+  console.log('[Standup] Recent standups context length: ' + (recentStandupsText && recentStandupsText.length));
+
   // Build prompt
-  var prompt = buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent);
-  var ctxBundle = buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSent);
+  var prompt = buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent, recentStandupsText);
+  var ctxBundle = buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSent, recentStandupsText);
   var aiCfg = normalizeAiConfig(cfg);
   console.log('[Standup] Calling AI provider: ' + aiCfg.provider + '...');
 

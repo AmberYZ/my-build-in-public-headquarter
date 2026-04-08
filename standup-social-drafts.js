@@ -55,23 +55,33 @@ function parseSocialPlanFromResponse(fullText) {
   return { markdown: markdown, tasks: tasks };
 }
 
-function buildWriterPrompt(ctx, task) {
+function buildWriterPrompt(ctx, task, isHigh) {
+  var lengthRule = isHigh
+    ? '\nLENGTH: Long-form is OK (essay, script, long thread). Match the format and channel.\n'
+    : '\nLENGTH: SHORT-form only (effort: low). Deliver a complete tweet, hook, short caption, or mini-thread — usually under ~600 words unless the format is a numbered thread. No long essay. No filler.\n';
+
   return (
     'You are a publish-ready social and content writer for someone building in public.\n\n' +
     'Produce ONE complete deliverable: the full text they can paste into ' +
     (task.channel || 'the channel') +
-    '. No preamble ("Sure, here is…"), no closing commentary—only the publishable content.\n\n' +
-    '--- TASK ---\n' +
+    '. No preamble ("Sure, here is…"), no closing commentary—only the publishable content.' +
+    lengthRule +
+    '\n--- TASK ---\n' +
     'Channel: ' + (task.channel || '') + '\n' +
     'Format: ' + (task.format || '') + '\n' +
     'Goal: ' + (task.goal || '') + '\n' +
+    'Effort: ' + (isHigh ? 'high (long)' : 'low (short)') + '\n' +
     'Angle / notes: ' + (task.notes || '') + '\n\n' +
     '--- VOICE (mirror when useful) ---\n' +
     ctx.socialText +
+    '\n\n--- PRIOR STANDUPS (reflection, wins, challenges — use for continuity) ---\n' +
+    (ctx.recentStandupsText || '(none)') +
     '\n\n--- WORK CONTEXT ---\n' +
     'Build logs:\n' +
     ctx.buildLogsText +
-    '\n\nIdeas:\n' +
+    '\n\nIdeas (IDEA_COUNT=' +
+    (ctx.ideaCount != null ? ctx.ideaCount : '?') +
+    '):\n' +
     ctx.ideaLogsText +
     '\n\nProjects:\n' +
     ctx.projectsText +
@@ -89,29 +99,40 @@ function isHighEffort(task) {
 }
 
 /**
- * Run one AI call per high-effort task (parallel). Writes markdown files and returns appendix + file list.
+ * Run one AI call per social plan item (parallel): long drafts for high effort, short for low.
+ * Writes markdown files under social-drafts/ and returns appendix + file list.
  */
 async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
   ensureDraftsDir();
   var base = publicBaseUrl(cfg);
-  var highList = [];
+  var draftList = [];
   for (var i = 0; i < (tasks || []).length; i++) {
-    if (isHighEffort(tasks[i])) {
-      highList.push({ task: tasks[i], order: highList.length + 1 });
-    }
+    draftList.push({ task: tasks[i], order: i + 1 });
   }
 
-  if (highList.length === 0) {
+  if (draftList.length === 0) {
     return { appendixMarkdown: '', files: [] };
   }
 
-  console.log('[Standup] Social draft agents: ' + highList.length + ' high-effort item(s)…');
+  var highCount = draftList.filter(function(e) {
+    return isHighEffort(e.task);
+  }).length;
+  console.log(
+    '[Standup] Social draft agents: ' +
+      draftList.length +
+      ' item(s) (' +
+      highCount +
+      ' high-effort, ' +
+      (draftList.length - highCount) +
+      ' short)…'
+  );
 
   var results = await Promise.all(
-    highList.map(function(entry) {
+    draftList.map(function(entry) {
       return (async function() {
         var t = entry.task;
         var n = entry.order;
+        var high = isHighEffort(t);
         var fname =
           dateStr +
           '_' +
@@ -120,11 +141,12 @@ async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
           slugPart(t.channel) +
           '_' +
           slugPart(t.format) +
+          (high ? '' : '_short') +
           '.md';
         var fpath = path.join(DRAFTS_DIR, fname);
-        var prompt = buildWriterPrompt(ctxBundle, t);
+        var prompt = buildWriterPrompt(ctxBundle, t, high);
         try {
-          var body = await callAi(cfg, prompt, { maxTokens: 4500 });
+          var body = await callAi(cfg, prompt, { maxTokens: high ? 4500 : 1800 });
           body = (body || '').trim();
           fs.writeFileSync(fpath, body, 'utf8');
           var url = base + '/social-drafts/' + encodeURIComponent(fname);
@@ -147,10 +169,10 @@ async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
 
   var lines = [];
   lines.push('');
-  lines.push('## 📎 Full drafts (generated separately)');
+  lines.push('## 📎 Social drafts (second pass)');
   lines.push('');
   lines.push(
-    'These files were produced in a second AI pass (one call per high-effort item). Open the URL or read the file under `social-drafts/` on the server.'
+    'One file per item in the social plan (short posts = `*_short.md`). Open the URL or read under `social-drafts/` on the server.'
   );
   lines.push('');
 
