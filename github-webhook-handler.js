@@ -1,7 +1,8 @@
 const { Client } = require('@notionhq/client');
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 const { load } = require('./config-store');
-const { findProjectPageByGithubUrl, appendBuildLogToProject } = require('./notion-project-github');
+const { findProjectPageByGithubUrl, appendBuildLogToProject, formatGithubCommitDetailForNotion } = require('./notion-project-github');
+const { summarizeCommitForBuildLogName } = require('./ai-provider');
 
 async function handleGitHubWebhook(payload) {
   const cfg = load();
@@ -34,15 +35,25 @@ async function handleGitHubWebhook(payload) {
     ...(c.removed || []).map(f => `- ${f}`)
   ]).join('\n');
 
+  let fullCommitMessage = '';
+  if (commits && commits.length > 0) {
+    fullCommitMessage = commits.map(c => c.message).filter(Boolean).join('\n\n---\n\n');
+  } else if (headCommit?.message) {
+    fullCommitMessage = headCommit.message;
+  }
+
+  const detailText = formatGithubCommitDetailForNotion(fullCommitMessage, allChanges);
+  const title = await summarizeCommitForBuildLogName(cfg, fullCommitMessage, allChanges);
+
   const properties = {
-    Name: { title: [{ text: { content: headCommit?.message?.split('\n')[0] || `Push to ${repoUrl}` } }] },
+    Name: { title: [{ text: { content: title || `Push to ${repoUrl}` } }] },
     'Source (Github/Manual)': { select: { name: 'Github' } },
     'Github Push (if any)': { url: `${repoUrl}/commit/${payload.head_commit?.id}` },
     'Build Date': { date: { start: payload.head_commit?.timestamp || new Date().toISOString() } }
   };
 
-  if (allChanges) {
-    properties.Detail = { rich_text: [{ text: { content: allChanges } }] };
+  if (detailText) {
+    properties.Detail = { rich_text: [{ text: { content: detailText } }] };
   }
   // Note: Projects is a dual_property - do not set from child side
 

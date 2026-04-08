@@ -268,10 +268,48 @@ async function listModels(cfgOrAi) {
   return [];
 }
 
+const BUILD_LOG_TITLE_MAX = 80;
+
+/**
+ * Short plain-text title for a Build Log row (Notion Name). Uses the configured AI;
+ * falls back to the first line of the commit message if no API key or the call fails.
+ */
+async function summarizeCommitForBuildLogName(cfg, fullCommitMessage, filesChangedText) {
+  const msg = (fullCommitMessage || '').trim();
+  if (!msg) return 'Git commit';
+
+  const ai = normalizeAiConfig(cfg);
+  if (!ai.apiKey) {
+    return msg.split('\n')[0].slice(0, BUILD_LOG_TITLE_MAX);
+  }
+
+  const filesBlock =
+    filesChangedText && filesChangedText.trim()
+      ? '\n\nFiles touched:\n' + filesChangedText.trim().slice(0, 1200)
+      : '';
+
+  const prompt =
+    'Write ONE short title (max 60 characters) for a "build log" row summarizing what this commit accomplished. ' +
+    'Plain text only: no quotes, no markdown, no bullet prefix. Be specific about what changed (avoid generic phrases like "Update code" or "Fix bug").\n\n' +
+    'Commit message:\n' +
+    msg +
+    filesBlock;
+
+  try {
+    let out = await callAi(cfg, prompt, { maxTokens: 120 });
+    out = (out || '').trim().replace(/^["']|["']$/g, '').replace(/\s+/g, ' ');
+    if (!out) throw new Error('empty');
+    return out.slice(0, BUILD_LOG_TITLE_MAX);
+  } catch (e) {
+    return msg.split('\n')[0].slice(0, BUILD_LOG_TITLE_MAX);
+  }
+}
+
 module.exports = {
   normalizeAiConfig,
   callAi,
   listModels,
   extractAxiosErrorMessage,
-  sanitizeModelForProvider
+  sanitizeModelForProvider,
+  summarizeCommitForBuildLogName
 };

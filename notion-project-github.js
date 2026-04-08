@@ -149,9 +149,25 @@ async function appendBuildLogToProject(notion, projectPageId, buildLogPageId) {
   }
 }
 
+const NOTION_RICH_TEXT_MAX = 2000;
+
+/**
+ * Build Log **Detail** body: full commit message(s), optional file list (GitHub backfill / webhook).
+ */
+function formatGithubCommitDetailForNotion(fullMessage, filesChanged) {
+  const msg = (fullMessage || '').trim();
+  let body = msg;
+  if (filesChanged && filesChanged.trim()) {
+    body += '\n\n—\nFiles:\n' + filesChanged.trim();
+  }
+  if (body.length <= NOTION_RICH_TEXT_MAX) return body;
+  return body.slice(0, NOTION_RICH_TEXT_MAX - 3) + '...';
+}
+
 module.exports = {
   normalizeGithubRepoUrl,
   fetchProjectsWithGithubUrl,
   findProjectPageByGithubUrl,
-  appendBuildLogToProject
+  appendBuildLogToProject,
+  formatGithubCommitDetailForNotion
 };

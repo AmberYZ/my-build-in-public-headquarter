@@ -8,7 +8,8 @@ const { Client } = require('@notionhq/client');
 const axios = require('axios');
 const { load, logActivity } = require('./config-store');
 const { socksAxiosOptions } = require('./outbound-http');
-const { fetchProjectsWithGithubUrl, appendBuildLogToProject } = require('./notion-project-github');
+const { fetchProjectsWithGithubUrl, appendBuildLogToProject, formatGithubCommitDetailForNotion } = require('./notion-project-github');
+const { summarizeCommitForBuildLogName } = require('./ai-provider');
 
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
@@ -42,7 +43,7 @@ async function fetchRecentCommits(owner, repo, days = 7) {
     );
     return resp.data.map(c => ({
       sha: c.sha,
-      message: c.commit.message.split('\n')[0], // first line only
+      fullMessage: c.commit.message,
       date: c.commit.author.date,
       url: c.html_url,
       author: c.commit.author.name,
@@ -98,15 +99,16 @@ async function getExistingBuildLogUrls(buildLogsDbId) {
 
 // Create a Build Log entry in Notion
 async function createBuildLog(buildLogsDbId, data) {
+  const detailText = formatGithubCommitDetailForNotion(data.fullMessage, data.files_changed);
   const properties = {
-    Name: { title: [{ text: { content: data.message } }] },
+    Name: { title: [{ text: { content: data.name } }] },
     'Source (Github/Manual)': { select: { name: 'Github' } },
     'Github Push (if any)': { url: data.url },
     'Build Date': { date: { start: data.date } }
   };
 
-  if (data.files_changed) {
-    properties.Detail = { rich_text: [{ text: { content: data.files_changed } }] };
+  if (detailText) {
+    properties.Detail = { rich_text: [{ text: { content: detailText } }] };
   }
 
   // Note: Projects is a dual_property - set it from the parent side only
@@ -181,8 +183,10 @@ async function runBackfill() {
       ].join('\n');
 
       try {
+        const name = await summarizeCommitForBuildLogName(cfg, commit.fullMessage, filesChanged);
         const newPage = await createBuildLog(buildLogsDb, {
-          message: commit.message,
+          name,
+          fullMessage: commit.fullMessage,
           url: commit.url,
           date: commit.date,
           files_changed: filesChanged,
@@ -192,7 +196,7 @@ async function runBackfill() {
         existingUrls.add(commit.url);
         repoCreated++;
         totalCreated++;
-        console.log(`[Backfill]   ✅ Created: ${commit.message.slice(0, 50)}`);
+        console.log(`[Backfill]   ✅ Created: ${name}`);
       } catch (err) {
         console.error(`[Backfill]   ❌ Failed: ${err.message}`);
       }
