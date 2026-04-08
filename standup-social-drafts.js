@@ -57,8 +57,8 @@ function parseSocialPlanFromResponse(fullText) {
 
 function buildWriterPrompt(ctx, task, isHigh) {
   var lengthRule = isHigh
-    ? '\nLENGTH: Long-form OK (essay, script, thread). Match the channel format.\n'
-    : '\nLENGTH: Short-form only — complete tweet, hook, caption, or mini-thread; avoid filler.\n';
+    ? '\nLENGTH: Long-form. For Twitter/X: write a full thread (6–15 tweets, numbered 1/, 2/, etc.) or a single long tweet (up to 280 chars) — whichever matches how they post. For other channels: essay, script, or full post. Do not cut short.\n'
+    : '\nLENGTH: Short-form — but still complete and self-contained. A single tweet, caption, or tight 3-tweet mini-thread. No filler, but do not truncate mid-thought.\n';
 
   return (
     'You are ghostwriting for ONE specific person. Your only job is to sound exactly like them — not like an AI, not like a LinkedIn creator, not like anyone else.\n\n' +

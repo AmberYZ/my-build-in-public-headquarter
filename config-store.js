@@ -107,6 +107,8 @@ One resource or one skipped line.
 ## 📝 Social & distribution
 Short angles and a compact plan (channel, format, goal, effort high or low). No long drafts here. For voice, lean on the real posts in the Content database block below—not generic creator tone.
 
+Effort rules for the JSON plan: Twitter/X posts about real work, builds, or progress → effort "high" (enables full thread or long-form tweet). Only mark "low" for simple reposts, quick replies, or minimal-context captions. When in doubt, default to "high" for Twitter. The format field should specify "thread" when a multi-tweet format fits the content.
+
 End the entire response with the machine block on its own lines (nothing after the JSON array):
 ---SOCIAL_PLAN_JSON---
 [{"channel":"…","format":"…","goal":"…","effort":"high","notes":"…"}]
