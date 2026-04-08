@@ -61,7 +61,7 @@ async function fetchRecentBuildLogs(cfg, days) {
       }
       return {
         id: p.id,
-        name: (p.properties.Name && p.properties.Name.title && p.properties.Name.title[0] ? p.properties.Name.title[0].plain_text : 'Untitled'),
+        name: pageTitleFromProperties(p),
         category: buildCategory,
         source: (p.properties['Source (Github/Manual)'] && p.properties['Source (Github/Manual)'].select ? p.properties['Source (Github/Manual)'].select.name : ''),
         detail: (p.properties.Detail && p.properties.Detail.rich_text && p.properties.Detail.rich_text[0] ? p.properties.Detail.rich_text[0].plain_text : ''),
@@ -278,7 +278,7 @@ async function fetchRecentIdeaLogs(cfg, days, projects) {
     var mapped = rawPages.map(function(p) {
       return {
         id: p.id,
-        name: (p.properties.Name && p.properties.Name.title && p.properties.Name.title[0] ? p.properties.Name.title[0].plain_text : 'Untitled'),
+        name: pageTitleFromProperties(p),
         category: (p.properties.Category && p.properties.Category.select ? p.properties.Category.select.name : ''),
         details: (p.properties.Details && p.properties.Details.rich_text && p.properties.Details.rich_text[0] ? p.properties.Details.rich_text[0].plain_text : ''),
         url: (p.properties.URL && p.properties.URL.url ? p.properties.URL.url : ''),
@@ -334,7 +334,7 @@ async function fetchProjects(cfg) {
       }
       return {
         id: p.id,
-        name: (p.properties.Name && p.properties.Name.title && p.properties.Name.title[0] ? p.properties.Name.title[0].plain_text : 'Untitled'),
+        name: pageTitleFromProperties(p),
         status: (p.properties.Status && p.properties.Status.select ? p.properties.Status.select.name : ''),
         cycles: cycles,
         github: (p.properties.Github && p.properties.Github.url ? p.properties.Github.url : ''),
@@ -665,7 +665,28 @@ function buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSen
 // Build the prompt by substituting data into the template
 function buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent, recentStandupsText) {
   var ctx = buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSent, recentStandupsText);
-  var prompt = cfg.standup.prompt
+  var userNickname = (cfg.standup && cfg.standup.userNickname && String(cfg.standup.userNickname).trim())
+    ? String(cfg.standup.userNickname).trim()
+    : '';
+  var writingTone = (cfg.standup && cfg.standup.writingTone && String(cfg.standup.writingTone).trim())
+    ? String(cfg.standup.writingTone).trim()
+    : '';
+
+  var prompt = cfg.standup.prompt;
+
+  // Replace placeholders if present in the template, otherwise prepend as a header
+  if (prompt.indexOf('{USER_NAME}') !== -1 || prompt.indexOf('{WRITING_TONE}') !== -1) {
+    prompt = prompt
+      .replace('{USER_NAME}', userNickname || 'the user')
+      .replace('{WRITING_TONE}', writingTone || 'clear, direct, and motivating');
+  } else if (userNickname || writingTone) {
+    var header = '';
+    if (userNickname) header += '👤 USER: ' + userNickname + '\n';
+    if (writingTone) header += '🎨 WRITING TONE: ' + writingTone + '\n';
+    prompt = header + '\n' + prompt;
+  }
+
+  prompt = prompt
     .replace('{BUILD_LOGS}', ctx.buildLogsText)
     .replace('{IDEA_LOGS}', ctx.ideaLogsText)
     .replace('{IDEA_COUNT}', String(ctx.ideaCount != null ? ctx.ideaCount : 0))

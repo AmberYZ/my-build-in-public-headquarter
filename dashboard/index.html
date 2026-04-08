@@ -315,6 +315,17 @@
             </div>
             <div class="checkbox-group" id="idea-types"></div>
             <div class="form-group" style="margin-top:16px">
+              <label>Your name or nickname</label>
+              <input type="text" id="standup-nickname" placeholder="e.g. Alex, boss, founder, Sam...">
+              <div class="field-hint">How the AI should address you. Injected as <code style="font-family:monospace">{USER_NAME}</code> in the prompt. Leave blank to use "the user".</div>
+            </div>
+            <div class="form-group">
+              <label>Writing tone</label>
+              <input type="text" id="standup-tone" placeholder="e.g. direct and motivating, warm mentor-like, no-nonsense, casual and encouraging...">
+              <div class="field-hint">How the AI should write to you. Injected as <code style="font-family:monospace">{WRITING_TONE}</code> in the prompt.</div>
+              <div class="checkbox-group" style="margin-top:8px" id="tone-suggestions"></div>
+            </div>
+            <div class="form-group" style="margin-top:16px">
               <label>Biggest blocker or friction lately</label>
               <textarea id="standup-blocker" rows="4" placeholder="Examples: not sure what to do next; shipped a lot but nobody sees it; hard turning builds into content..."></textarea>
               <div class="field-hint">Optional. Fed into the prompt as {BIGGEST_BLOCKER} so the standup addresses what's actually stuck.</div>
@@ -680,6 +691,22 @@ async function loadDashboard() {
       });
     });
 
+    document.getElementById('standup-nickname').value = cfg.standup?.userNickname || '';
+    document.getElementById('standup-tone').value = cfg.standup?.writingTone || '';
+
+    // Tone suggestion chips
+    const TONE_SUGGESTIONS = [
+      'direct and motivating', 'warm mentor-like', 'no-nonsense', 'casual and encouraging',
+      'concise bullet-style', 'strategic advisor', 'friendly coach'
+    ];
+    const toneEl = document.getElementById('tone-suggestions');
+    const currentTone = cfg.standup?.writingTone || '';
+    toneEl.innerHTML = TONE_SUGGESTIONS.map(t => `
+      <label class="checkbox-item ${currentTone === t ? 'checked' : ''}" data-tone="${t}" onclick="pickTone(this)">
+        <span>${t}</span>
+      </label>
+    `).join('');
+
     document.getElementById('standup-blocker').value = cfg.standup?.biggestBlocker || '';
 
     // AI provider
@@ -813,10 +840,19 @@ async function savePrompt() {
   showToast('Prompt saved!', 'success');
 }
 
+function pickTone(el) {
+  const tone = el.dataset.tone;
+  document.getElementById('standup-tone').value = tone;
+  document.querySelectorAll('#tone-suggestions .checkbox-item').forEach(c => c.classList.remove('checked'));
+  el.classList.add('checked');
+}
+
 async function saveStandupPreferences() {
   const checked = [...document.querySelectorAll('#idea-types input:checked')].map(i => i.value);
   const biggestBlocker = document.getElementById('standup-blocker').value;
-  await api('POST', '/api/config', { standup: { ideaTypes: checked, biggestBlocker } });
+  const userNickname = document.getElementById('standup-nickname').value.trim();
+  const writingTone = document.getElementById('standup-tone').value.trim();
+  await api('POST', '/api/config', { standup: { ideaTypes: checked, biggestBlocker, userNickname, writingTone } });
   showToast('Standup preferences saved!', 'success');
 }
 

@@ -16,6 +16,10 @@ const DEFAULT_CONFIG = {
     /** Poll Notion standup pages for checked to-dos and append Build Log rows (cron expression; empty = disabled). */
     syncCheckedTodosCron: '*/15 * * * *',
     ideaTypes: ['New Feature', 'Feature Improvement', 'Content Idea', 'Marketing'],
+    /** Your name or nickname the AI should use when writing to you (e.g. "Alex", "founder", "boss"). Injected as {USER_NAME}. */
+    userNickname: '',
+    /** How the AI should write to you (e.g. "direct and motivating", "warm mentor-like", "no-nonsense"). Injected as {WRITING_TONE}. */
+    writingTone: '',
     /** Free text: current friction (e.g. unclear next step, distribution, storytelling). Injected as {BIGGEST_BLOCKER}. */
     biggestBlocker: '',
     /** When ideaLogFetchMode is "lookback": only ideas created in the last N days. Ignored when mode is "all". */
@@ -35,6 +39,10 @@ const DEFAULT_CONFIG = {
     /** Temperature for second-pass social draft files only (typical 0.45–0.65; lower = closer to your samples). */
     socialDraftTemperature: 0.55,
     prompt: `You are a startup founder's AI productivity assistant. You receive structured data from the user's Notion databases (build logs, idea logs, projects—including page bodies where goals and scope live—and optionally posts they published) plus preferences and blocker text.
+
+**Address the user directly as "{USER_NAME}" throughout the standup** — use this name when opening sections, giving suggestions, and asking reflection questions. Never say "the user" or "you" generically; use the actual name.
+
+**Write the entire standup in this tone: {WRITING_TONE}.** This applies to every section — the intention paragraph, the todo list commentary, the idea review, the reflection prompt, and the social plan. Let the tone shape word choice, energy, and sentence structure, not just the opening line.
 
 ## How to think (do this before writing)
 1. Infer strategy from the data only. Do not assume a fixed playbook. Name what they care about this week in plain language.
@@ -71,7 +79,7 @@ Then output the standup in this order (body sections only—start with section 1
 First section. Next line: :::ai then flowing prose, then ::: on its own line. In one narrative, cover BOTH: (a) what you infer the user wants this week from their data, and (b) how you chose today's plan—todos, tradeoffs, which projects/ideas you weighted, and your angle for distribution. Do not use subheadings like "Projects referenced:" or separate "transparency" lists.
 
 ## ✅ Today's TODO List
-Second section. At most 3 unchecked "- [ ]" items. Sub-bullets for drafts where needed.
+Second section. Do NOT wrap this section in :::ai or any fence. Output the items directly as bare "- [ ] …" lines so they render as Notion checkboxes. At most 3 items. Sub-bullets for drafts where needed.
 
 ## 📋 Idea backlog review (full pass)
 Third section, only if IDEA_COUNT is at least 1. Next line: :::ai. Opening sentence must state the exact IDEA_COUNT from the data block and confirm you are reviewing every listed idea (1/N through N/N). One line per idea in that order: title, status (prioritized today | parked | later | not aligned), one line why. If fewer than 12 appear in the data block, say that IDEA_COUNT from Notion is N—not that ideas are "missing". Close :::.
