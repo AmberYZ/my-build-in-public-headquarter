@@ -204,6 +204,7 @@
       <a href="#" class="active" data-section="dashboard"><span class="nav-icon">⬡</span> Dashboard</a>
       <div class="sidebar-section-label">Tools</div>
       <a href="#" data-section="standup"><span class="nav-icon">✦</span> Daily Standup</a>
+      <a href="#" data-section="social"><span class="nav-icon">✎</span> Social Drafts</a>
       <a href="#" data-section="github"><span class="nav-icon">◎</span> GitHub Sync</a>
       <a href="#" data-section="activity"><span class="nav-icon">≡</span> Activity Log</a>
       <div class="sidebar-section-label">Settings</div>
@@ -526,6 +527,22 @@
       </div>
     </div>
 
+    <!-- ─── Social Drafts ─── -->
+    <div class="section" id="section-social">
+      <div class="page-header">
+        <h2>Social Drafts</h2>
+        <p>Regenerate individual social content drafts with custom instructions</p>
+      </div>
+      <div class="card">
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <label style="font-size:13px; color:var(--text-dim);">Date</label>
+          <input type="date" id="social-date" style="background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:6px 10px; font-size:13px;" />
+          <button class="btn btn-primary btn-sm" onclick="loadSocialDrafts()">Load Drafts</button>
+        </div>
+      </div>
+      <div id="social-drafts-list"></div>
+    </div>
+
     <!-- ─── Activity Log ─── -->
     <div class="section" id="section-activity">
       <div class="page-header">
@@ -560,6 +577,7 @@ document.querySelectorAll('.sidebar nav a').forEach(a => {
     a.classList.add('active');
     if (section === 'activity') loadActivity();
     if (section === 'github') loadGithub();
+    if (section === 'social') loadSocialDrafts();
   });
 });
 
@@ -1060,6 +1078,86 @@ async function clearLog() {
   await api('POST', '/api/config', { activityLog: [] });
   loadActivity();
   loadDashboard();
+}
+
+// ─── Social Drafts ────────────────────────────────────────────────────────────
+(function initSocialDatePicker() {
+  const today = new Date().toISOString().split('T')[0];
+  const el = document.getElementById('social-date');
+  if (el) el.value = today;
+})();
+
+async function loadSocialDrafts() {
+  const dateEl = document.getElementById('social-date');
+  const date = dateEl ? dateEl.value : new Date().toISOString().split('T')[0];
+  const container = document.getElementById('social-drafts-list');
+  container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:20px 0">Loading…</div>';
+  try {
+    const r = await api('GET', '/api/social-drafts/list?date=' + encodeURIComponent(date));
+    if (!r.drafts || r.drafts.length === 0) {
+      container.innerHTML = '<div class="card" style="color:var(--text-muted);font-size:13px;">No social drafts found for ' + date + '. Generate the daily standup first.</div>';
+      return;
+    }
+    container.innerHTML = r.drafts.map(d => `
+      <div class="card" id="social-draft-card-${d.taskIndex}" style="margin-bottom:14px">
+        <div class="card-header" style="margin-bottom:10px">
+          <div>
+            <div class="card-title">${escHtml(d.channel)} / ${escHtml(d.format)}</div>
+            <div class="card-subtitle">${escHtml(d.goal || '')}</div>
+          </div>
+          <span style="font-size:11px;padding:3px 8px;border-radius:4px;background:var(--surface2);color:var(--text-dim)">${escHtml(d.effort || 'low')}</span>
+        </div>
+        ${d.exists
+          ? `<div style="margin-bottom:10px"><a href="${escHtml(d.url)}" target="_blank" style="color:var(--accent);font-size:13px;text-decoration:none;">↗ Open draft</a></div>`
+          : `<div style="margin-bottom:10px;color:var(--text-muted);font-size:12px;">Draft file not yet generated</div>`}
+        <div style="margin-bottom:8px">
+          <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px">Extra instructions (optional)</label>
+          <textarea id="social-instr-${d.taskIndex}" rows="2" placeholder="e.g. make it shorter, focus on the technical angle, more casual tone…" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;resize:vertical;line-height:1.4"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" id="social-regen-btn-${d.taskIndex}" onclick="regenerateDraft(${d.taskIndex}, '${escHtml(date)}')">↻ Regenerate</button>
+          <button class="btn btn-ghost btn-sm" onclick="skipSocialDraft(${d.taskIndex})" style="color:var(--text-muted)">✕ Skip</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = '<div class="card" style="color:var(--red);font-size:13px;">' + escHtml(err.message) + '</div>';
+  }
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function skipSocialDraft(taskIndex) {
+  const card = document.getElementById('social-draft-card-' + taskIndex);
+  if (card) {
+    card.style.transition = 'opacity 0.2s';
+    card.style.opacity = '0';
+    setTimeout(() => { card.style.display = 'none'; }, 200);
+  }
+}
+
+async function regenerateDraft(taskIndex, date) {
+  const btn = document.getElementById('social-regen-btn-' + taskIndex);
+  const instrEl = document.getElementById('social-instr-' + taskIndex);
+  const extraInstructions = instrEl ? instrEl.value.trim() : '';
+  const origText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Regenerating…';
+  try {
+    const r = await api('POST', '/api/social-drafts/regenerate', { date, taskIndex, extraInstructions });
+    showToast('Draft regenerated!', 'success');
+    // Update the open link
+    const card = document.getElementById('social-draft-card-' + taskIndex);
+    const linkEl = card && card.querySelector('a[target="_blank"]');
+    if (linkEl) linkEl.href = r.url;
+  } catch (err) {
+    showToast('Regeneration failed: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = origText;
+  }
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────

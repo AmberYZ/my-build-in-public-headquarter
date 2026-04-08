@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { callAi, extractAxiosErrorMessage } = require('./ai-provider');
+const { load } = require('./config-store');
 
 var SOCIAL_JSON_MARKER = '---SOCIAL_PLAN_JSON---';
 var DRAFTS_DIR = path.join(__dirname, 'social-drafts');
@@ -184,7 +185,8 @@ async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
             path: fpath,
             url: url,
             channel: t.channel,
-            format: t.format
+            format: t.format,
+            taskIndex: n - 1
           };
         } catch (err) {
           var msg = extractAxiosErrorMessage(err);
@@ -206,7 +208,7 @@ async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
   for (var j = 0; j < results.length; j++) {
     var r = results[j];
     if (r.ok) {
-      files.push({ path: r.path, url: r.url, fname: r.fname });
+      files.push({ path: r.path, url: r.url, fname: r.fname, taskIndex: r.taskIndex });
       lines.push(
         '- **' +
           (r.channel || '') +
@@ -225,11 +227,80 @@ async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
     }
   }
 
+  // Persist the social plan so individual drafts can be regenerated later
+  try {
+    var planPath = path.join(DRAFTS_DIR, dateStr + '_social_plan.json');
+    fs.writeFileSync(planPath, JSON.stringify({ date: dateStr, tasks: tasks }, null, 2), 'utf8');
+  } catch (planErr) {
+    console.error('[Standup] Failed to save social plan JSON:', planErr.message);
+  }
+
   return { appendixMarkdown: lines.join('\n'), files: files };
+}
+
+/**
+ * Regenerate a single social draft (by taskIndex) with optional extra instructions.
+ * Reads the persisted social plan JSON; does NOT re-run the full standup.
+ */
+async function regenerateSingleDraft(cfg, dateStr, taskIndex, extraInstructions) {
+  ensureDraftsDir();
+  cfg = cfg || load();
+  var planPath = path.join(DRAFTS_DIR, dateStr + '_social_plan.json');
+  if (!fs.existsSync(planPath)) {
+    throw new Error('No social plan found for ' + dateStr + '. Generate the standup first.');
+  }
+  var plan;
+  try {
+    plan = JSON.parse(fs.readFileSync(planPath, 'utf8'));
+  } catch (e) {
+    throw new Error('Could not parse social plan: ' + e.message);
+  }
+  var tasks = plan.tasks || [];
+  if (taskIndex < 0 || taskIndex >= tasks.length) {
+    throw new Error('taskIndex ' + taskIndex + ' out of range (plan has ' + tasks.length + ' tasks)');
+  }
+  var task = Object.assign({}, tasks[taskIndex]);
+  if (extraInstructions && String(extraInstructions).trim()) {
+    task.notes = (task.notes ? task.notes + '\n\n' : '') + 'User instruction: ' + String(extraInstructions).trim();
+  }
+
+  // Fetch fresh context bundle
+  var { fetchContextBundle } = require('./standup-generator');
+  var ctxBundle = await fetchContextBundle(cfg, dateStr);
+
+  var high = isHighEffort(task);
+  var n = taskIndex + 1;
+  var fname =
+    dateStr +
+    '_' +
+    String(n).padStart(2, '0') +
+    '_' +
+    slugPart(task.channel) +
+    '_' +
+    slugPart(task.format) +
+    (high ? '' : '_short') +
+    '.md';
+  var fpath = path.join(DRAFTS_DIR, fname);
+  var prompt = buildWriterPrompt(ctxBundle, task, high);
+  var draftTemp =
+    cfg.standup && typeof cfg.standup.socialDraftTemperature === 'number'
+      ? cfg.standup.socialDraftTemperature
+      : 0.55;
+
+  var body = await callAi(cfg, prompt, { maxTokens: high ? 4500 : 1800, temperature: draftTemp });
+  body = (body || '').trim();
+  fs.writeFileSync(fpath, body, 'utf8');
+  var base = publicBaseUrl(cfg);
+  var url = base + '/social-drafts/' + encodeURIComponent(fname);
+  return { ok: true, fname: fname, path: fpath, url: url, channel: task.channel, format: task.format };
 }
 
 module.exports = {
   parseSocialPlanFromResponse: parseSocialPlanFromResponse,
   runSocialDraftAgents: runSocialDraftAgents,
-  SOCIAL_JSON_MARKER: SOCIAL_JSON_MARKER
+  regenerateSingleDraft: regenerateSingleDraft,
+  SOCIAL_JSON_MARKER: SOCIAL_JSON_MARKER,
+  DRAFTS_DIR: DRAFTS_DIR,
+  publicBaseUrl: publicBaseUrl,
+  slugPart: slugPart
 };

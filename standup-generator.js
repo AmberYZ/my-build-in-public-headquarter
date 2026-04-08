@@ -1295,9 +1295,22 @@ if (require.main === module) {
     .catch(function(e) { console.error(e); process.exit(1); });
 }
 
+/** Fetch all context data and return a context bundle — used for social draft regeneration. */
+async function fetchContextBundle(cfg, dateStr) {
+  cfg = cfg || load();
+  dateStr = dateStr || new Date().toISOString().split('T')[0];
+  var buildLogs = await fetchRecentBuildLogs(cfg, 7);
+  var projects = await fetchProjects(cfg);
+  var ideaLogs = await fetchRecentIdeaLogs(cfg, null, projects);
+  var socialSent = await fetchSentSocialPosts(cfg);
+  var recentStandupsText = await fetchRecentStandupContexts(cfg, dateStr);
+  return buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSent, recentStandupsText);
+}
+
 module.exports = {
   generateStandup,
   parseContentToBlocks,
   buildStandupContextBundle,
+  fetchContextBundle,
   stripUiLegendFromStandupMarkdown: stripUiLegendFromStandupMarkdown
 };

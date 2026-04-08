@@ -8,6 +8,7 @@ const { runBackfill } = require('./backfill');
 const { generateStandup } = require('./standup-generator');
 const { syncStandupCheckedTodosToBuildLogs } = require('./standup-todo-sync');
 const { callAi, normalizeAiConfig, listModels, sanitizeModelForProvider } = require('./ai-provider');
+const { regenerateSingleDraft, DRAFTS_DIR, publicBaseUrl, slugPart } = require('./standup-social-drafts');
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001');
@@ -277,6 +278,58 @@ app.get('/api/dashboard/stats', async (req, res) => {
       totalIdeas,
       totalStandups
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── API: Social Drafts ───────────────────────────────────────────────────────
+app.get('/api/social-drafts/list', (req, res) => {
+  try {
+    const freshCfg = load();
+    const date = (req.query.date || new Date().toISOString().split('T')[0]).trim();
+    const planPath = path.join(DRAFTS_DIR, date + '_social_plan.json');
+    let plan = { date, tasks: [] };
+    if (fs.existsSync(planPath)) {
+      try { plan = JSON.parse(fs.readFileSync(planPath, 'utf8')); } catch (e) {}
+    }
+    const base = publicBaseUrl(freshCfg);
+    const drafts = (plan.tasks || []).map((t, i) => {
+      const high = String(t.effort || '').toLowerCase() === 'high';
+      const fname =
+        date +
+        '_' + String(i + 1).padStart(2, '0') +
+        '_' + slugPart(t.channel) +
+        '_' + slugPart(t.format) +
+        (high ? '' : '_short') + '.md';
+      const fpath = path.join(DRAFTS_DIR, fname);
+      return {
+        taskIndex: i,
+        fname,
+        exists: fs.existsSync(fpath),
+        url: base + '/social-drafts/' + encodeURIComponent(fname),
+        channel: t.channel,
+        format: t.format,
+        effort: t.effort,
+        goal: t.goal,
+        notes: t.notes
+      };
+    });
+    res.json({ date, tasks: plan.tasks || [], drafts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/social-drafts/regenerate', async (req, res) => {
+  try {
+    const freshCfg = load();
+    const { date, taskIndex, extraInstructions } = req.body || {};
+    if (!date) return res.status(400).json({ error: 'date is required' });
+    if (taskIndex == null) return res.status(400).json({ error: 'taskIndex is required' });
+    const result = await regenerateSingleDraft(freshCfg, date, Number(taskIndex), extraInstructions || '');
+    logActivity('social_regen', `Regenerated social draft ${taskIndex} for ${date}`);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
