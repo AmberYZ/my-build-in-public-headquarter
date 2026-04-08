@@ -28,6 +28,8 @@ const DEFAULT_CONFIG = {
     ideaExcludeDone: true,
     /** Extra Status values (lowercase) that mean "done", e.g. "won\'t do" — merged with built-in done/completed/… */
     ideaDoneStatusNames: [],
+    /** Optional exact project names to treat as today's focus; ideas linked to other projects are skipped. */
+    priorityProjectNamesToday: [],
     /** How many rows to load from notion.socialMediaDb (your Content / sent-posts database) for voice cloning. */
     socialVoiceSampleMaxRows: 60,
     /** Temperature for second-pass social draft files only (typical 0.45–0.65; lower = closer to your samples). */
@@ -124,7 +126,7 @@ End the entire response with the machine block on its own lines (nothing after t
     projectsDb: '33b56b0e-dde0-8033-98c4-d5a5098e50e1',
     buildLogsDb: '33b56b0e-dde0-80ee-aaf4-e07594673071',
     ideaLogsDb: '33b56b0e-dde0-8047-bd1f-e33ed88e5a1f',
-    /** Notion database ID — each standup is a new row (title = Daily Stand-up - YYYY-MM-DD). */
+    /** Notion database ID — each standup is a new row (title = creative title + YYYY-MM-DD). */
     standupDb: null,
     /** Optional: Notion database of posts you published (Content / sent posts). Drives standup voice + social draft cloning. See social-media-db-setup.md */
     socialMediaDb: null

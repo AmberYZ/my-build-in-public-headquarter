@@ -145,12 +145,61 @@ function isIdeaRowDone(page, cfg) {
  * so every backlog row (e.g. all 12) is included regardless of created date. Optional: lookback mode filters by created_time.
  * Rows with Done/Checked checkboxes or Status=Done (etc.) are skipped — they are already completed.
  */
-async function fetchRecentIdeaLogs(cfg, days) {
+function collectPriorityProjectIdLookup(cfg, projects) {
+  var lookup = {};
+  var hasPrioritySignal = false;
+  var configuredNames =
+    cfg &&
+    cfg.standup &&
+    Array.isArray(cfg.standup.priorityProjectNamesToday)
+      ? cfg.standup.priorityProjectNamesToday
+      : [];
+  var configuredNameLookup = {};
+  for (var ci = 0; ci < configuredNames.length; ci++) {
+    var nm = String(configuredNames[ci] || '').toLowerCase().trim();
+    if (nm) configuredNameLookup[nm] = true;
+  }
+  if (Object.keys(configuredNameLookup).length > 0) {
+    hasPrioritySignal = true;
+  }
+  for (var i = 0; i < (projects || []).length; i++) {
+    var p = projects[i];
+    if (!p || !p.id) continue;
+    var byFlag = p.isPriorityToday === true;
+    var byName = configuredNameLookup[String(p.name || '').toLowerCase().trim()] === true;
+    if (byFlag || byName) {
+      lookup[p.id] = true;
+      hasPrioritySignal = true;
+    }
+  }
+  return { hasPrioritySignal: hasPrioritySignal, lookup: lookup };
+}
+
+function extractProjectRelationIdsFromIdeaPage(page, validProjectIdsLookup) {
+  var out = [];
+  var props = (page && page.properties) || {};
+  for (var key in props) {
+    var pr = props[key];
+    if (!pr || pr.type !== 'relation' || !Array.isArray(pr.relation)) continue;
+    for (var i = 0; i < pr.relation.length; i++) {
+      var rid = pr.relation[i] && pr.relation[i].id ? pr.relation[i].id : '';
+      if (rid && validProjectIdsLookup[rid]) out.push(rid);
+    }
+  }
+  return out;
+}
+
+async function fetchRecentIdeaLogs(cfg, days, projects) {
   var maxRows =
     cfg.standup && cfg.standup.ideaLogMaxRows != null ? Number(cfg.standup.ideaLogMaxRows) : 200;
   if (isNaN(maxRows) || maxRows < 1) maxRows = 200;
   var fetchMode = (cfg.standup && cfg.standup.ideaLogFetchMode) || 'all';
   if (fetchMode !== 'lookback') fetchMode = 'all';
+  var projectIdsLookup = {};
+  for (var pi = 0; pi < (projects || []).length; pi++) {
+    if (projects[pi] && projects[pi].id) projectIdsLookup[projects[pi].id] = true;
+  }
+  var priority = collectPriorityProjectIdLookup(cfg, projects || []);
 
   try {
     var rawPages = [];
@@ -168,7 +217,12 @@ async function fetchRecentIdeaLogs(cfg, days) {
         var batchAll = respAll.results || [];
         for (var ai = 0; ai < batchAll.length; ai++) {
           var pa = batchAll[ai];
-          if (!isIdeaRowDone(pa, cfg)) {
+          var relProjectIdsAll = extractProjectRelationIdsFromIdeaPage(pa, projectIdsLookup);
+          var keepByProjectScope = true;
+          if (priority.hasPrioritySignal && relProjectIdsAll.length > 0) {
+            keepByProjectScope = relProjectIdsAll.some(function(pid) { return priority.lookup[pid]; });
+          }
+          if (!isIdeaRowDone(pa, cfg) && keepByProjectScope) {
             rawPages.push(pa);
             if (rawPages.length >= maxRows) break;
           }
@@ -204,7 +258,12 @@ async function fetchRecentIdeaLogs(cfg, days) {
             hitOld = true;
             break;
           }
-          if (!isIdeaRowDone(p, cfg)) {
+          var relProjectIdsLb = extractProjectRelationIdsFromIdeaPage(p, projectIdsLookup);
+          var keepByProjectScopeLb = true;
+          if (priority.hasPrioritySignal && relProjectIdsLb.length > 0) {
+            keepByProjectScopeLb = relProjectIdsLb.some(function(pid) { return priority.lookup[pid]; });
+          }
+          if (!isIdeaRowDone(p, cfg) && keepByProjectScopeLb) {
             rawPages.push(p);
             if (rawPages.length >= maxRows) break;
           }
@@ -246,12 +305,40 @@ async function fetchProjects(cfg) {
       if (p.properties.Cycles && p.properties.Cycles.multi_select) {
         cycles = p.properties.Cycles.multi_select.map(function(s) { return s.name; });
       }
+      var isPriorityToday = false;
+      var props = p.properties || {};
+      for (var key in props) {
+        var pr = props[key];
+        if (!pr) continue;
+        var keyLower = String(key || '').toLowerCase().trim();
+        if (pr.type === 'checkbox' && pr.checkbox === true) {
+          if (
+            keyLower === 'priority today' ||
+            keyLower === 'today priority' ||
+            keyLower === 'focus today' ||
+            keyLower === 'today focus' ||
+            keyLower === 'today'
+          ) {
+            isPriorityToday = true;
+          }
+        }
+        if (pr.type === 'select' && pr.select && pr.select.name) {
+          var sv = String(pr.select.name || '').toLowerCase().trim();
+          if (keyLower === 'priority' && (sv === 'today' || sv === 'high')) {
+            isPriorityToday = true;
+          }
+          if ((keyLower === 'status' || keyLower === 'stage') && (sv === 'today' || sv === 'in focus')) {
+            isPriorityToday = true;
+          }
+        }
+      }
       return {
         id: p.id,
         name: (p.properties.Name && p.properties.Name.title && p.properties.Name.title[0] ? p.properties.Name.title[0].plain_text : 'Untitled'),
         status: (p.properties.Status && p.properties.Status.select ? p.properties.Status.select.name : ''),
         cycles: cycles,
-        github: (p.properties.Github && p.properties.Github.url ? p.properties.Github.url : '')
+        github: (p.properties.Github && p.properties.Github.url ? p.properties.Github.url : ''),
+        isPriorityToday: isPriorityToday
       };
     });
     return await enrichRowsWithPageBodies(mapped, { maxChars: 8000, maxBlocks: 300 });
@@ -967,12 +1054,56 @@ async function getStandupDatePropertyKey(databaseId) {
   return null;
 }
 
-var STANDUP_TITLE_PREFIX = 'Daily Stand-up - ';
+var CREATIVE_STANDUP_ADJECTIVES = [
+  'Focused',
+  'Curious',
+  'Bold',
+  'Steady',
+  'Playful',
+  'Sharp',
+  'Relentless',
+  'Crafted',
+  'Intentional',
+  'Optimistic',
+  'Grounded',
+  'Inventive'
+];
+
+var CREATIVE_STANDUP_NOUNS = [
+  'Momentum',
+  'Blueprint',
+  'Sprint',
+  'Canvas',
+  'Flow',
+  'Forge',
+  'Arc',
+  'Signal',
+  'Pulse',
+  'Trajectory',
+  'Checkpoint',
+  'Launchpad'
+];
+
+function hashDateSeed(dateStr) {
+  var text = String(dateStr || '');
+  var hash = 0;
+  for (var i = 0; i < text.length; i++) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function standupTitleForDate(dateStr) {
+  var seed = hashDateSeed(dateStr);
+  var adj = CREATIVE_STANDUP_ADJECTIVES[seed % CREATIVE_STANDUP_ADJECTIVES.length];
+  var noun = CREATIVE_STANDUP_NOUNS[Math.floor(seed / CREATIVE_STANDUP_ADJECTIVES.length) % CREATIVE_STANDUP_NOUNS.length];
+  return adj + ' ' + noun + ' - ' + dateStr;
+}
 
 // Check if a standup for this date already exists (query by title in the standup database)
 async function todaysStandupExists(cfg, dateStr) {
   dateStr = dateStr || new Date().toISOString().split('T')[0];
-  var fullTitle = STANDUP_TITLE_PREFIX + dateStr;
+  var fullTitle = standupTitleForDate(dateStr);
   var dbId = getStandupDbId(cfg);
   if (!dbId) return null;
   try {
@@ -1000,7 +1131,7 @@ function buildStandupChildren(content) {
 // Create a daily standup as a new row in the standup database
 async function createDailyStandupPage(cfg, dateStr, content) {
   var children = buildStandupChildren(content);
-  var fullTitle = STANDUP_TITLE_PREFIX + dateStr;
+  var fullTitle = standupTitleForDate(dateStr);
   var dbId = getStandupDbId(cfg);
   if (!dbId) {
     throw new Error('Set notion.standupDb (Notion standup database ID) in config or the dashboard.');
@@ -1049,21 +1180,21 @@ async function generateStandup(opts) {
   var buildLogs = await fetchRecentBuildLogs(cfg, 7);
   console.log('[Standup] Found ' + buildLogs.length + ' build logs');
 
+  console.log('[Standup] Fetching Projects...');
+  var projects = await fetchProjects(cfg);
+  console.log('[Standup] Found ' + projects.length + ' projects');
+
   console.log('[Standup] Fetching Idea Logs...');
-  var ideaLogs = await fetchRecentIdeaLogs(cfg, null);
+  var ideaLogs = await fetchRecentIdeaLogs(cfg, null, projects);
   console.log(
     '[Standup] Found ' +
       ideaLogs.length +
-      ' idea logs (mode: ' +
+      ' idea logs after project-priority filtering (mode: ' +
       ((cfg.standup && cfg.standup.ideaLogFetchMode) || 'all') +
       ', maxRows: ' +
       (cfg.standup && cfg.standup.ideaLogMaxRows != null ? cfg.standup.ideaLogMaxRows : 200) +
       ')'
   );
-
-  console.log('[Standup] Fetching Projects...');
-  var projects = await fetchProjects(cfg);
-  console.log('[Standup] Found ' + projects.length + ' projects');
 
   console.log('[Standup] Fetching sent social posts (voice DB)...');
   var socialSent = await fetchSentSocialPosts(cfg);
