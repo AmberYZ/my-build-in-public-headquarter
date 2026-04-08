@@ -50,9 +50,19 @@ async function fetchRecentBuildLogs(cfg, days) {
       .filter(function(p) { return new Date(p.created_time) >= since; })
       .sort(function(a, b) { return new Date(b.created_time) - new Date(a.created_time); })
       .map(function(p) {
+      var catPr = p.properties.Category;
+      var buildCategory = '';
+      if (catPr) {
+        if (catPr.type === 'select' && catPr.select && catPr.select.name) {
+          buildCategory = catPr.select.name;
+        } else if (catPr.type === 'multi_select' && catPr.multi_select && catPr.multi_select.length) {
+          buildCategory = catPr.multi_select.map(function (s) { return s.name; }).join(', ');
+        }
+      }
       return {
         id: p.id,
         name: (p.properties.Name && p.properties.Name.title && p.properties.Name.title[0] ? p.properties.Name.title[0].plain_text : 'Untitled'),
+        category: buildCategory,
         source: (p.properties['Source (Github/Manual)'] && p.properties['Source (Github/Manual)'].select ? p.properties['Source (Github/Manual)'].select.name : ''),
         detail: (p.properties.Detail && p.properties.Detail.rich_text && p.properties.Detail.rich_text[0] ? p.properties.Detail.rich_text[0].plain_text : ''),
         url: (p.properties['Github Push (if any)'] && p.properties['Github Push (if any)'].url ? p.properties['Github Push (if any)'].url : ''),
@@ -477,11 +487,12 @@ function buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSen
     ? 'No builds logged recently.'
     : buildLogs.map(function(b) {
         var date = b.date ? b.date.split('T')[0] : '';
+        var cat = b.category ? ' [' + b.category + ']' : '';
         var detail = b.detail ? '\n  Properties (Detail): ' + b.detail.split('\n').slice(0, 8).join(', ') : '';
         var body = b.pageBody && b.pageBody.trim()
           ? '\n  Page content:\n' + indentPrefixed(b.pageBody, '    ')
           : '';
-        return '[' + date + '] ' + b.name + (b.source ? ' (' + b.source + ')' : '') + detail + body;
+        return '[' + date + ']' + cat + ' ' + b.name + (b.source ? ' (' + b.source + ')' : '') + detail + body;
       }).join('\n\n');
 
   var lookbackDays =

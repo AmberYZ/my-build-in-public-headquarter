@@ -164,10 +164,53 @@ function formatGithubCommitDetailForNotion(fullMessage, filesChanged) {
   return body.slice(0, NOTION_RICH_TEXT_MAX - 3) + '...';
 }
 
+const { resolveCategoryOptionName } = require('./ai-provider');
+
+/**
+ * Read Build Logs DB **Category** column (select or multi_select). Returns null if missing or no options.
+ */
+async function getBuildLogCategoryFieldMeta(notion, buildLogsDbId) {
+  if (!buildLogsDbId) return null;
+  try {
+    const db = await notion.databases.retrieve({ database_id: buildLogsDbId });
+    const cat = db.properties && db.properties.Category;
+    if (!cat) return null;
+    if (cat.type === 'select' && cat.select && Array.isArray(cat.select.options)) {
+      const options = cat.select.options.map(o => o.name).filter(Boolean);
+      if (options.length === 0) return null;
+      return { type: 'select', options };
+    }
+    if (cat.type === 'multi_select' && cat.multi_select && Array.isArray(cat.multi_select.options)) {
+      const options = cat.multi_select.options.map(o => o.name).filter(Boolean);
+      if (options.length === 0) return null;
+      return { type: 'multi_select', options };
+    }
+  } catch (err) {
+    console.warn('[NotionProjectGitHub] Could not read Build Log Category field:', err.message);
+  }
+  return null;
+}
+
+/**
+ * Set **Category** on properties if label matches a Notion option.
+ */
+function applyBuildLogCategoryProperty(properties, fieldMeta, categoryName) {
+  if (!fieldMeta || !categoryName) return;
+  const name = resolveCategoryOptionName(categoryName, fieldMeta.options);
+  if (!name) return;
+  if (fieldMeta.type === 'select') {
+    properties.Category = { select: { name } };
+  } else if (fieldMeta.type === 'multi_select') {
+    properties.Category = { multi_select: [{ name }] };
+  }
+}
+
 module.exports = {
   normalizeGithubRepoUrl,
   fetchProjectsWithGithubUrl,
   findProjectPageByGithubUrl,
   appendBuildLogToProject,
-  formatGithubCommitDetailForNotion
+  formatGithubCommitDetailForNotion,
+  getBuildLogCategoryFieldMeta,
+  applyBuildLogCategoryProperty
 };

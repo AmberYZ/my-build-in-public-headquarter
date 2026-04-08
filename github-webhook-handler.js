@@ -1,8 +1,14 @@
 const { Client } = require('@notionhq/client');
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 const { load } = require('./config-store');
-const { findProjectPageByGithubUrl, appendBuildLogToProject, formatGithubCommitDetailForNotion } = require('./notion-project-github');
-const { summarizeCommitForBuildLogName } = require('./ai-provider');
+const {
+  findProjectPageByGithubUrl,
+  appendBuildLogToProject,
+  formatGithubCommitDetailForNotion,
+  getBuildLogCategoryFieldMeta,
+  applyBuildLogCategoryProperty
+} = require('./notion-project-github');
+const { summarizeCommitForBuildLogName, classifyBuildLogCategory } = require('./ai-provider');
 
 async function handleGitHubWebhook(payload) {
   const cfg = load();
@@ -43,7 +49,13 @@ async function handleGitHubWebhook(payload) {
   }
 
   const detailText = formatGithubCommitDetailForNotion(fullCommitMessage, allChanges);
-  const title = await summarizeCommitForBuildLogName(cfg, fullCommitMessage, allChanges);
+  const categoryMeta = await getBuildLogCategoryFieldMeta(notion, cfg.notion.buildLogsDb);
+  const [title, categoryName] = await Promise.all([
+    summarizeCommitForBuildLogName(cfg, fullCommitMessage, allChanges),
+    categoryMeta
+      ? classifyBuildLogCategory(cfg, fullCommitMessage, allChanges, categoryMeta)
+      : Promise.resolve(null)
+  ]);
 
   const properties = {
     Name: { title: [{ text: { content: title || `Push to ${repoUrl}` } }] },
@@ -54,6 +66,9 @@ async function handleGitHubWebhook(payload) {
 
   if (detailText) {
     properties.Detail = { rich_text: [{ text: { content: detailText } }] };
+  }
+  if (categoryMeta && categoryName) {
+    applyBuildLogCategoryProperty(properties, categoryMeta, categoryName);
   }
   // Note: Projects is a dual_property - do not set from child side
 

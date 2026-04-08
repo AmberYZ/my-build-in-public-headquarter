@@ -8,8 +8,14 @@ const { Client } = require('@notionhq/client');
 const axios = require('axios');
 const { load, logActivity } = require('./config-store');
 const { socksAxiosOptions } = require('./outbound-http');
-const { fetchProjectsWithGithubUrl, appendBuildLogToProject, formatGithubCommitDetailForNotion } = require('./notion-project-github');
-const { summarizeCommitForBuildLogName } = require('./ai-provider');
+const {
+  fetchProjectsWithGithubUrl,
+  appendBuildLogToProject,
+  formatGithubCommitDetailForNotion,
+  getBuildLogCategoryFieldMeta,
+  applyBuildLogCategoryProperty
+} = require('./notion-project-github');
+const { summarizeCommitForBuildLogName, classifyBuildLogCategory } = require('./ai-provider');
 
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
@@ -111,6 +117,10 @@ async function createBuildLog(buildLogsDbId, data) {
     properties.Detail = { rich_text: [{ text: { content: detailText } }] };
   }
 
+  if (data.categoryFieldMeta && data.categoryName) {
+    applyBuildLogCategoryProperty(properties, data.categoryFieldMeta, data.categoryName);
+  }
+
   // Note: Projects is a dual_property - set it from the parent side only
   // (Notion manages the reverse relation automatically)
 
@@ -145,6 +155,11 @@ async function runBackfill() {
   // Step 2: Get existing GitHub push URLs to avoid duplicates
   const existingUrls = await getExistingBuildLogUrls(buildLogsDb);
   console.log(`[Backfill] ${existingUrls.size} existing build log entries`);
+
+  const categoryMeta = await getBuildLogCategoryFieldMeta(notion, buildLogsDb);
+  if (categoryMeta) {
+    console.log(`[Backfill] Category field: ${categoryMeta.type} (${categoryMeta.options.length} options)`);
+  }
 
   // Step 3: For each repo, fetch commits and create missing entries
   let totalCreated = 0;
@@ -183,14 +198,21 @@ async function runBackfill() {
       ].join('\n');
 
       try {
-        const name = await summarizeCommitForBuildLogName(cfg, commit.fullMessage, filesChanged);
+        const [name, categoryName] = await Promise.all([
+          summarizeCommitForBuildLogName(cfg, commit.fullMessage, filesChanged),
+          categoryMeta
+            ? classifyBuildLogCategory(cfg, commit.fullMessage, filesChanged, categoryMeta)
+            : Promise.resolve(null)
+        ]);
         const newPage = await createBuildLog(buildLogsDb, {
           name,
           fullMessage: commit.fullMessage,
           url: commit.url,
           date: commit.date,
           files_changed: filesChanged,
-          projectId
+          projectId,
+          categoryFieldMeta: categoryMeta,
+          categoryName
         });
         await appendBuildLogToProject(notion, projectId, newPage.id);
         existingUrls.add(commit.url);

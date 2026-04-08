@@ -310,11 +310,112 @@ async function summarizeCommitForBuildLogName(cfg, fullCommitMessage, filesChang
   }
 }
 
+/**
+ * Match an LLM label to a Notion select option (exact / substring, case-insensitive).
+ */
+function resolveCategoryOptionName(candidate, allowedOptions) {
+  if (!candidate || !allowedOptions || !allowedOptions.length) return null;
+  const c = String(candidate)
+    .trim()
+    .split(/\n/)[0]
+    .replace(/^["']|["']$/g, '');
+  if (!c) return null;
+  const lower = c.toLowerCase();
+  let hit = allowedOptions.find(function (o) {
+    return o.toLowerCase() === lower;
+  });
+  if (hit) return hit;
+  hit = allowedOptions.find(function (o) {
+    return lower.includes(o.toLowerCase()) || o.toLowerCase().includes(lower);
+  });
+  return hit || null;
+}
+
+/**
+ * Pick a best-effort category from allowed Notion options using commit text + paths (no AI).
+ */
+function pickCategoryHeuristic(message, filesText, allowed) {
+  if (!allowed.length) return null;
+  const lower = ((message || '') + '\n' + (filesText || '')).toLowerCase();
+  var buckets = [
+    { keys: ['fix', 'bug', 'patch', 'regression', 'hotfix'], hints: ['bug', 'fix'] },
+    { keys: ['feat', 'feature', 'implement', 'add ', 'introduce'], hints: ['feature'] },
+    { keys: ['doc', 'readme', 'changelog', '.md'], hints: ['doc', 'content', 'writing'] },
+    { keys: ['test', 'spec', 'jest', 'pytest', 'coverage'], hints: ['test', 'qa', 'spec'] },
+    { keys: ['refactor', 'cleanup', 'lint', 'rename'], hints: ['refactor', 'maint'] },
+    { keys: ['deploy', 'ci', 'workflow', 'docker', 'k8s'], hints: ['devops', 'infra', 'ci', 'ops'] },
+    { keys: ['deps', 'bump', 'package-lock', 'yarn.lock', 'go.mod'], hints: ['dep', 'chore'] },
+    { keys: ['style', 'css', 'ui', 'ux', 'tailwind'], hints: ['ui', 'front', 'design', 'style'] },
+    { keys: ['perf', 'optimize', 'speed', 'memory'], hints: ['perf', 'performance'] },
+    { keys: ['security', 'auth', 'vulnerability', 'cve'], hints: ['sec', 'security'] },
+    { keys: ['api', 'endpoint', 'graphql', 'rest'], hints: ['api', 'backend'] }
+  ];
+  for (var bi = 0; bi < buckets.length; bi++) {
+    var b = buckets[bi];
+    var hitKey = false;
+    for (var ki = 0; ki < b.keys.length; ki++) {
+      if (lower.indexOf(b.keys[ki]) !== -1) {
+        hitKey = true;
+        break;
+      }
+    }
+    if (!hitKey) continue;
+    for (var hi = 0; hi < b.hints.length; hi++) {
+      var h = b.hints[hi];
+      var found = allowed.find(function (a) {
+        return a.toLowerCase().indexOf(h) !== -1;
+      });
+      if (found) return found;
+    }
+  }
+  var general = allowed.find(function (a) {
+    return /^general|^other|^misc/i.test(a);
+  });
+  return general || allowed[0];
+}
+
+/**
+ * One Notion **Category** option for a GitHub commit (must match an existing select/multi-select option).
+ */
+async function classifyBuildLogCategory(cfg, fullCommitMessage, filesChangedText, fieldMeta) {
+  if (!fieldMeta || !fieldMeta.options || fieldMeta.options.length === 0) return null;
+  var allowed = fieldMeta.options;
+  var msg = (fullCommitMessage || '').trim();
+  var files = (filesChangedText || '').trim();
+
+  var ai = normalizeAiConfig(cfg);
+  if (!ai.apiKey) {
+    return pickCategoryHeuristic(msg, files, allowed);
+  }
+
+  var prompt =
+    'You classify a git commit for a build log. Pick exactly ONE category from this list (copy the label exactly):\n' +
+    allowed.map(function (x) {
+      return '- ' + x;
+    }).join('\n') +
+    '\n\nCommit message:\n' +
+    msg.slice(0, 2000) +
+    (files ? '\n\nFiles:\n' + files.slice(0, 1200) : '') +
+    '\n\nReply with ONLY the category label, nothing else.';
+
+  try {
+    var out = await callAi(cfg, prompt, { maxTokens: 40 });
+    out = (out || '').trim().split(/\n/)[0].replace(/^["']|["']$/g, '');
+    var resolved = resolveCategoryOptionName(out, allowed);
+    if (resolved) return resolved;
+  } catch (e) {
+    /* fall through */
+  }
+  return pickCategoryHeuristic(msg, files, allowed);
+}
+
 module.exports = {
   normalizeAiConfig,
   callAi,
   listModels,
   extractAxiosErrorMessage,
   sanitizeModelForProvider,
-  summarizeCommitForBuildLogName
+  summarizeCommitForBuildLogName,
+  resolveCategoryOptionName,
+  classifyBuildLogCategory
 };
