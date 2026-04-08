@@ -3,7 +3,6 @@ const express = require('express');
 const cron = require('node-cron');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 const { load, save, logActivity } = require('./config-store');
 const { runBackfill } = require('./backfill');
 const { generateStandup } = require('./standup-generator');
@@ -233,31 +232,6 @@ app.get('/api/github/repos', async (req, res) => {
   }
 });
 
-// ─── GitHub Webhook ───────────────────────────────────────────────────────────
-app.post('/webhook/github', (req, res) => {
-  const secret = cfg.github?.webhookSecret;
-  if (secret) {
-    const sig = req.headers['x-hub-signature-256'];
-    const hmac = crypto.createHmac('sha256', secret);
-    const digest = 'sha256=' + hmac.update(JSON.stringify(req.body)).digest('hex');
-    if (sig !== digest) {
-      console.warn('[Webhook] Invalid signature');
-      return res.status(401).json({ error: 'Invalid signature' });
-    }
-  }
-
-  const event = req.headers['x-github-event'];
-  if (event !== 'push') return res.status(200).json({ ignored: true });
-
-  const { handleGitHubWebhook } = require('./github-webhook-handler');
-  handleGitHubWebhook(req.body)
-    .then(() => res.status(200).json({ status: 'ok' }))
-    .catch(err => {
-      console.error('[Webhook] Error:', err.message);
-      res.status(500).json({ error: err.message });
-    });
-});
-
 // ─── Server control ──────────────────────────────────────────────────────────
 app.post('/api/server/restart', (req, res) => {
   logActivity('server', 'Server restart requested');
@@ -308,7 +282,6 @@ if (syncTodoCron && cfg.standup?.enabled !== false) {
 app.listen(PORT, () => {
   console.log(`\n🚀 Build-in-Public Dashboard: http://localhost:${PORT}`);
   console.log(`📊 API Health: http://localhost:${PORT}/api/health`);
-  console.log(`🐙 Webhook: http://localhost:${PORT}/webhook/github`);
   console.log(`📋 Standup: POST http://localhost:${PORT}/api/standup/generate`);
   console.log(`✅ Standup todos → Build Logs: POST http://localhost:${PORT}/api/standup/sync-todos`);
   console.log(`📄 Social draft files: http://localhost:${PORT}/social-drafts/`);

@@ -152,7 +152,7 @@ async function appendBuildLogToProject(notion, projectPageId, buildLogPageId) {
 const NOTION_RICH_TEXT_MAX = 2000;
 
 /**
- * Build Log **Detail** body: full commit message(s), optional file list (GitHub backfill / webhook).
+ * Build Log **Detail** body: full activity message, optional file list.
  */
 function formatGithubCommitDetailForNotion(fullMessage, filesChanged) {
   const msg = (fullMessage || '').trim();

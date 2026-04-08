@@ -118,7 +118,6 @@ End the entire response with the machine block on its own lines (nothing after t
   },
   github: {
     syncEnabled: true,
-    webhookSecret: 'secret_change_me_123',
     repos: []
   },
   notion: {
