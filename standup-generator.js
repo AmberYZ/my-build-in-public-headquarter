@@ -1075,69 +1075,42 @@ async function getStandupDatePropertyKey(databaseId) {
   return null;
 }
 
-var CREATIVE_STANDUP_ADJECTIVES = [
-  'Focused',
-  'Curious',
-  'Bold',
-  'Steady',
-  'Playful',
-  'Sharp',
-  'Relentless',
-  'Crafted',
-  'Intentional',
-  'Optimistic',
-  'Grounded',
-  'Inventive'
-];
-
-var CREATIVE_STANDUP_NOUNS = [
-  'Momentum',
-  'Blueprint',
-  'Sprint',
-  'Canvas',
-  'Flow',
-  'Forge',
-  'Arc',
-  'Signal',
-  'Pulse',
-  'Trajectory',
-  'Checkpoint',
-  'Launchpad'
-];
-
-function hashDateSeed(dateStr) {
-  var text = String(dateStr || '');
-  var hash = 0;
-  for (var i = 0; i < text.length; i++) {
-    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+async function generateStandupTitle(cfg, content, dateStr) {
+  var prompt =
+    'Based on the following daily standup content, generate a short, specific title (5 words or fewer) ' +
+    'that captures the main theme or focus of the day. Do not use generic words like "standup", "daily", or "update". ' +
+    'Output only the title, nothing else.\n\n' +
+    content.slice(0, 2000);
+  try {
+    var title = await callAi(cfg, prompt, { maxTokens: 30 });
+    title = title.trim().replace(/^["']|["']$/g, '').replace(/\.$/, '');
+    if (title && title.length > 0) return title + ' - ' + dateStr;
+  } catch (err) {
+    console.error('[Standup] Title generation failed:', err.message);
   }
-  return hash;
+  return 'Standup - ' + dateStr;
 }
 
-function standupTitleForDate(dateStr) {
-  var seed = hashDateSeed(dateStr);
-  var adj = CREATIVE_STANDUP_ADJECTIVES[seed % CREATIVE_STANDUP_ADJECTIVES.length];
-  var noun = CREATIVE_STANDUP_NOUNS[Math.floor(seed / CREATIVE_STANDUP_ADJECTIVES.length) % CREATIVE_STANDUP_NOUNS.length];
-  return adj + ' ' + noun + ' - ' + dateStr;
-}
-
-// Check if a standup for this date already exists (query by title in the standup database)
+// Check if a standup for this date already exists (query by date property in the standup database)
 async function todaysStandupExists(cfg, dateStr) {
   dateStr = dateStr || new Date().toISOString().split('T')[0];
-  var fullTitle = standupTitleForDate(dateStr);
   var dbId = getStandupDbId(cfg);
   if (!dbId) return null;
   try {
-    var titleKey = await getStandupTitlePropertyKey(dbId);
-    var resp = await notion.databases.query({
-      database_id: dbId,
-      filter: {
-        property: titleKey,
-        title: { equals: fullTitle }
-      },
-      page_size: 5
-    });
-    if (resp.results && resp.results.length > 0) return resp.results[0].id;
+    var dateKey = await getStandupDatePropertyKey(dbId);
+    if (dateKey) {
+      var resp = await notion.databases.query({
+        database_id: dbId,
+        filter: {
+          property: dateKey,
+          date: { equals: dateStr }
+        },
+        page_size: 5
+      });
+      if (resp.results && resp.results.length > 0) return resp.results[0].id;
+      return null;
+    }
+    // Fallback: no date property, cannot deduplicate
     return null;
   } catch (err) {
     console.error('[Standup] Duplicate check failed:', err.message);
@@ -1150,9 +1123,9 @@ function buildStandupChildren(content) {
 }
 
 // Create a daily standup as a new row in the standup database
-async function createDailyStandupPage(cfg, dateStr, content) {
+async function createDailyStandupPage(cfg, dateStr, content, title) {
   var children = buildStandupChildren(content);
-  var fullTitle = standupTitleForDate(dateStr);
+  var fullTitle = title || ('Standup - ' + dateStr);
   var dbId = getStandupDbId(cfg);
   if (!dbId) {
     throw new Error('Set notion.standupDb (Notion standup database ID) in config or the dashboard.');
@@ -1262,10 +1235,15 @@ async function generateStandup(opts) {
   }
   var finalContent = standupMarkdown + (draftAppend ? '\n\n' + draftAppend : '');
 
+  // Generate title from content
+  console.log('[Standup] Generating title...');
+  var standupTitle = await generateStandupTitle(cfg, standupMarkdown, dateStr);
+  console.log('[Standup] Title: ' + standupTitle);
+
   // Create page
   console.log('[Standup] Creating Notion page...');
   try {
-    var page = await createDailyStandupPage(cfg, dateStr, finalContent);
+    var page = await createDailyStandupPage(cfg, dateStr, finalContent, standupTitle);
     var pageUrl = 'https://notion.so/' + page.id.replace(/-/g, '');
     console.log('[Standup] Page created: ' + pageUrl);
 

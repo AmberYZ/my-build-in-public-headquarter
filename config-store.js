@@ -76,13 +76,23 @@ const DEFAULT_CONFIG = {
 Then output the standup in this order (body sections only—start with section 1, nothing before it):
 
 ## 🎯 Intention & how today's plan was built
-First section. Next line: :::ai then flowing prose, then ::: on its own line. In one narrative, cover BOTH: (a) what you infer the user wants this week from their data, and (b) how you chose today's plan—todos, tradeoffs, which projects/ideas you weighted, and your angle for distribution. Do not use subheadings like "Projects referenced:" or separate "transparency" lists.
+First section. Next line: :::ai then flowing prose (3–5 sentences max), then ::: on its own line. Cover three things concisely: (1) 1–2 sentences on what the user accomplished or shipped in the past week based on build logs and prior standups; (2) what you infer they want to push forward today; (3) briefly how you weighted today's todos (which project/idea, why now). No subheadings, no bullet lists, no "transparency" prose.
 
 ## ✅ Today's TODO List
-Second section. Do NOT wrap this section in :::ai or any fence. Output the items directly as bare "- [ ] …" lines so they render as Notion checkboxes. At most 3 items. Sub-bullets for drafts where needed.
+Second section. Do NOT wrap this section in :::ai or any fence. Output the items directly as bare "- [ ] …" lines so they render as Notion checkboxes. At most 3 items. Sub-bullets for drafts where needed. **If any ideas are marked "prioritized today" in the idea backlog review, at least one todo must come from or directly support that idea.**
 
 ## 📋 Idea backlog review (full pass)
-Third section, only if IDEA_COUNT is at least 1. Next line: :::ai. Opening sentence must state the exact IDEA_COUNT from the data block and confirm you are reviewing every listed idea (1/N through N/N). One line per idea in that order: title, status (prioritized today | parked | later | not aligned), one line why. If fewer than 12 appear in the data block, say that IDEA_COUNT from Notion is N—not that ideas are "missing". Close :::.
+Third section, only if IDEA_COUNT is at least 1. Do NOT wrap this section in :::ai or any fence — output everything as bare lines so each renders as its own block. Opening sentence must state the exact IDEA_COUNT from the data block and confirm you are reviewing every listed idea (1/N through N/N). One line per idea in that order: title, status label (see below), one line why.
+
+Status labels and visual indicators to use:
+- 🔴 **prioritized today** — idea linked to a today-focus project or the highest-leverage thing to act on now
+- 🟡 **worth soon** — valuable but not urgent; pick up in the next few days
+- ⚪ **parked** — low signal or blocked; revisit later
+- ❌ **not aligned** — doesn't fit current focus at all
+
+**Project scoping rule:** if today's focus projects are known (from PROJECTS data or priority signal), only ideas linked to those projects get 🔴. Ideas linked to non-focus projects should be ⚪ parked or ❌ not aligned unless they are clearly cross-cutting. Do not promote non-focus-project ideas to 🔴 or 🟡 just to fill the list.
+
+If fewer than 12 appear in the data block, say that IDEA_COUNT from Notion is N—not that ideas are "missing".
 
 ## 🌱 Daily reflection
 Fourth section. Next line: :::you. Two parts only: (1) a short natural-language paragraph weaving together the main challenges and wins from their data—no separate challenge/win bullet lists; (2) exactly ONE creative reflection question or prompt for them to answer—not a numbered questionnaire. Close :::.
