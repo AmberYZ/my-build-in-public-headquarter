@@ -8,7 +8,7 @@ const { runBackfill } = require('./backfill');
 const { generateStandup } = require('./standup-generator');
 const { syncStandupCheckedTodosToBuildLogs } = require('./standup-todo-sync');
 const { callAi, normalizeAiConfig, listModels, sanitizeModelForProvider } = require('./ai-provider');
-const { regenerateSingleDraft, DRAFTS_DIR, publicBaseUrl, slugPart } = require('./standup-social-drafts');
+const { regenerateSingleDraft, createNewDraft, saveDraftToNotion, DRAFTS_DIR, publicBaseUrl, slugPart } = require('./standup-social-drafts');
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001');
@@ -330,6 +330,44 @@ app.post('/api/social-drafts/regenerate', async (req, res) => {
     const result = await regenerateSingleDraft(freshCfg, date, Number(taskIndex), extraInstructions || '');
     logActivity('social_regen', `Regenerated social draft ${taskIndex} for ${date}`);
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/social-drafts/create', async (req, res) => {
+  try {
+    const freshCfg = load();
+    const { date, task } = req.body || {};
+    if (!date) return res.status(400).json({ error: 'date is required' });
+    if (!task || !task.channel || !task.format) return res.status(400).json({ error: 'task.channel and task.format are required' });
+    const result = await createNewDraft(freshCfg, date, task);
+    logActivity('social_create', `Created new social draft for ${date}: ${task.channel} / ${task.format}`);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/social-drafts/publish', async (req, res) => {
+  try {
+    const freshCfg = load();
+    const { title, platform, contentType, projectId, content, date } = req.body || {};
+    if (!content) return res.status(400).json({ error: 'content is required' });
+    const result = await saveDraftToNotion(freshCfg, { title, platform, contentType, projectId, content, date });
+    logActivity('social_publish', `Saved social post to Notion: ${platform} / ${contentType}`);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/social-drafts/projects', async (req, res) => {
+  try {
+    const { fetchProjects } = require('./standup-generator');
+    const freshCfg = load();
+    const projects = await fetchProjects(freshCfg);
+    res.json({ projects: projects.map(p => ({ id: p.id, name: p.name, status: p.status })) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

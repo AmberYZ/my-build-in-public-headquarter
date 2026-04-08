@@ -295,10 +295,111 @@ async function regenerateSingleDraft(cfg, dateStr, taskIndex, extraInstructions)
   return { ok: true, fname: fname, path: fpath, url: url, channel: task.channel, format: task.format };
 }
 
+/**
+ * Create a brand-new social draft not in the original plan.
+ * Appends the task to the persisted plan JSON (creating one if missing) then generates.
+ */
+async function createNewDraft(cfg, dateStr, task) {
+  ensureDraftsDir();
+  cfg = cfg || load();
+  var planPath = path.join(DRAFTS_DIR, dateStr + '_social_plan.json');
+  var plan = { date: dateStr, tasks: [] };
+  if (fs.existsSync(planPath)) {
+    try { plan = JSON.parse(fs.readFileSync(planPath, 'utf8')); } catch (e) {}
+  }
+  plan.tasks = plan.tasks || [];
+  var taskIndex = plan.tasks.length;
+  plan.tasks.push(task);
+  fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), 'utf8');
+
+  var { fetchContextBundle } = require('./standup-generator');
+  var ctxBundle = await fetchContextBundle(cfg, dateStr);
+
+  var high = isHighEffort(task);
+  var n = taskIndex + 1;
+  var fname =
+    dateStr +
+    '_' +
+    String(n).padStart(2, '0') +
+    '_' +
+    slugPart(task.channel) +
+    '_' +
+    slugPart(task.format) +
+    (high ? '' : '_short') +
+    '.md';
+  var fpath = path.join(DRAFTS_DIR, fname);
+  var prompt = buildWriterPrompt(ctxBundle, task, high);
+  var draftTemp =
+    cfg.standup && typeof cfg.standup.socialDraftTemperature === 'number'
+      ? cfg.standup.socialDraftTemperature
+      : 0.55;
+  var body = await callAi(cfg, prompt, { maxTokens: high ? 4500 : 1800, temperature: draftTemp });
+  body = (body || '').trim();
+  fs.writeFileSync(fpath, body, 'utf8');
+  var base = publicBaseUrl(cfg);
+  var url = base + '/social-drafts/' + encodeURIComponent(fname);
+  return { ok: true, fname: fname, path: fpath, url: url, channel: task.channel, format: task.format, taskIndex: taskIndex };
+}
+
+/**
+ * Save a draft to the Notion social media DB as a "sent/published" entry so it feeds voice training.
+ * properties: { title, platform, contentType, projectId, content, date }
+ */
+async function saveDraftToNotion(cfg, properties) {
+  cfg = cfg || load();
+  var dbId = cfg.notion && cfg.notion.socialMediaDb ? String(cfg.notion.socialMediaDb).trim() : '';
+  if (!dbId) throw new Error('notion.socialMediaDb is not configured');
+
+  var { Client } = require('@notionhq/client');
+  var notion = new Client({ auth: process.env.NOTION_API_KEY });
+
+  var title = String(properties.title || 'Social Post').slice(0, 255);
+  var platform = String(properties.platform || '').trim();
+  var contentType = String(properties.contentType || '').trim();
+  var content = String(properties.content || '').trim();
+  var dateStr = String(properties.date || new Date().toISOString().split('T')[0]).trim();
+
+  var notionProps = {
+    Name: { title: [{ text: { content: title } }] }
+  };
+  if (platform) notionProps['Platform'] = { select: { name: platform } };
+  if (contentType) notionProps['Content Type'] = { select: { name: contentType } };
+  if (content) notionProps['Content'] = { rich_text: [{ text: { content: content.slice(0, 2000) } }] };
+  notionProps['Date'] = { date: { start: dateStr } };
+
+  // Link project relation if provided
+  if (properties.projectId && String(properties.projectId).trim()) {
+    notionProps['Project'] = { relation: [{ id: String(properties.projectId).trim() }] };
+  }
+
+  var page = await notion.pages.create({
+    parent: { database_id: dbId },
+    properties: notionProps
+  });
+
+  // Append full content as page body if it's long (over 2000 chars gets truncated in property)
+  if (content.length > 2000) {
+    try {
+      await notion.blocks.children.append({
+        block_id: page.id,
+        children: [{
+          object: 'block',
+          type: 'paragraph',
+          paragraph: { rich_text: [{ type: 'text', text: { content: content.slice(0, 2000) } }] }
+        }]
+      });
+    } catch (e) {}
+  }
+
+  return { ok: true, pageId: page.id, url: 'https://notion.so/' + page.id.replace(/-/g, '') };
+}
+
 module.exports = {
   parseSocialPlanFromResponse: parseSocialPlanFromResponse,
   runSocialDraftAgents: runSocialDraftAgents,
   regenerateSingleDraft: regenerateSingleDraft,
+  createNewDraft: createNewDraft,
+  saveDraftToNotion: saveDraftToNotion,
   SOCIAL_JSON_MARKER: SOCIAL_JSON_MARKER,
   DRAFTS_DIR: DRAFTS_DIR,
   publicBaseUrl: publicBaseUrl,

@@ -1312,5 +1312,6 @@ module.exports = {
   parseContentToBlocks,
   buildStandupContextBundle,
   fetchContextBundle,
+  fetchProjects,
   stripUiLegendFromStandupMarkdown: stripUiLegendFromStandupMarkdown
 };
