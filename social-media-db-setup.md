@@ -29,4 +29,4 @@ Ensure your Notion integration has access to this database (same as your other b
 
 ## 5. Habit
 
-After you post something you care about, add a row with the **Post** text. Optional: page body under the row is also read if the main property is empty.
+After you post something you care about, add a row with the **Post** text. Paste **full threads** or **long LinkedIn essays** when you can—the standup model uses these to learn tone and substance, not only short one-liners. Optional: page body under the row is also read if the main property is empty.

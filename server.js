@@ -20,6 +20,7 @@ app.use(express.json());
 // ─── Serve dashboard (must be before API routes) ───────────────────────────────
 const dashboardPath = path.resolve(__dirname, 'dashboard', 'index.html');
 app.use('/dashboard', express.static(path.join(__dirname, 'dashboard')));
+app.use('/social-drafts', express.static(path.join(__dirname, 'social-drafts')));
 
 function sendDashboard(res) {
   fs.readFile(dashboardPath, 'utf8', (err, html) => {
@@ -310,5 +311,6 @@ app.listen(PORT, () => {
   console.log(`🐙 Webhook: http://localhost:${PORT}/webhook/github`);
   console.log(`📋 Standup: POST http://localhost:${PORT}/api/standup/generate`);
   console.log(`✅ Standup todos → Build Logs: POST http://localhost:${PORT}/api/standup/sync-todos`);
+  console.log(`📄 Social draft files: http://localhost:${PORT}/social-drafts/`);
   console.log(`\nOpen http://localhost:${PORT} in your browser for the dashboard\n`);
 });

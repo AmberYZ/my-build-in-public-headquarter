@@ -11,6 +11,7 @@ const { Client } = require('@notionhq/client');
 const { load, logActivity } = require('./config-store');
 const { callAi, normalizeAiConfig, extractAxiosErrorMessage } = require('./ai-provider');
 const { fetchPageBodyPlainText } = require('./notion-page-body');
+const { parseSocialPlanFromResponse, runSocialDraftAgents } = require('./standup-social-drafts');
 
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
@@ -251,8 +252,8 @@ function formatProjectsForPrompt(projects) {
   }).join('\n\n');
 }
 
-// Build the prompt by substituting data into the template
-function buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent) {
+/** Shared context strings for main standup prompt and social draft agents. */
+function buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSent) {
   var buildLogsText = buildLogs.length === 0
     ? 'No builds logged recently.'
     : buildLogs.map(function(b) {
@@ -287,13 +288,26 @@ function buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent) {
 
   var socialText = formatSocialSentForPrompt(socialSent || []);
 
+  return {
+    buildLogsText: buildLogsText,
+    ideaLogsText: ideaLogsText,
+    ideaTypesStr: ideaTypesStr,
+    blockerText: blockerText,
+    projectsText: projectsText,
+    socialText: socialText
+  };
+}
+
+// Build the prompt by substituting data into the template
+function buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent) {
+  var ctx = buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSent);
   var prompt = cfg.standup.prompt
-    .replace('{BUILD_LOGS}', buildLogsText)
-    .replace('{IDEA_LOGS}', ideaLogsText)
-    .replace('{IDEA_TYPES}', ideaTypesStr)
-    .replace('{PROJECTS}', projectsText)
-    .replace('{BIGGEST_BLOCKER}', blockerText)
-    .replace('{SOCIAL_SENT_POSTS}', socialText);
+    .replace('{BUILD_LOGS}', ctx.buildLogsText)
+    .replace('{IDEA_LOGS}', ctx.ideaLogsText)
+    .replace('{IDEA_TYPES}', ctx.ideaTypesStr)
+    .replace('{PROJECTS}', ctx.projectsText)
+    .replace('{BIGGEST_BLOCKER}', ctx.blockerText)
+    .replace('{SOCIAL_SENT_POSTS}', ctx.socialText);
 
   return prompt;
 }
@@ -440,6 +454,7 @@ async function createStandupPageWithBlocks(notion, databaseId, properties, child
 }
 
 var TITLE_CACHE = {};
+var STANDUP_DATE_PROP_CACHE = {};
 
 function getStandupDbId(cfg) {
   var db = cfg.notion && cfg.notion.standupDb;
@@ -458,6 +473,31 @@ async function getStandupTitlePropertyKey(databaseId) {
     }
   }
   throw new Error('Standup database has no title column — add a title property in Notion.');
+}
+
+/** First matching date property on the standup DB (prefers "Date"). Returns null if none. */
+async function getStandupDatePropertyKey(databaseId) {
+  if (Object.prototype.hasOwnProperty.call(STANDUP_DATE_PROP_CACHE, databaseId)) {
+    return STANDUP_DATE_PROP_CACHE[databaseId];
+  }
+  var db = await notion.databases.retrieve({ database_id: databaseId });
+  var props = db.properties || {};
+  var preferred = ['Date', 'Standup date', 'Day'];
+  for (var i = 0; i < preferred.length; i++) {
+    var pk = preferred[i];
+    if (props[pk] && props[pk].type === 'date') {
+      STANDUP_DATE_PROP_CACHE[databaseId] = pk;
+      return pk;
+    }
+  }
+  for (var key in props) {
+    if (props[key] && props[key].type === 'date') {
+      STANDUP_DATE_PROP_CACHE[databaseId] = key;
+      return key;
+    }
+  }
+  STANDUP_DATE_PROP_CACHE[databaseId] = null;
+  return null;
 }
 
 var STANDUP_TITLE_PREFIX = 'Daily Stand-up - ';
@@ -519,6 +559,12 @@ async function createDailyStandupPage(cfg, dateStr, content) {
   props[titleKey] = {
     title: [{ text: { content: fullTitle } }]
   };
+  var dateKey = await getStandupDatePropertyKey(dbId);
+  if (dateKey) {
+    props[dateKey] = { date: { start: dateStr } };
+  } else {
+    console.log('[Standup] No Date property found on standup database — add a "Date" column in Notion to set it automatically.');
+  }
   return createStandupPageWithBlocks(notion, dbId, props, children);
 }
 
@@ -566,13 +612,14 @@ async function generateStandup(opts) {
 
   // Build prompt
   var prompt = buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent);
+  var ctxBundle = buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSent);
   var aiCfg = normalizeAiConfig(cfg);
   console.log('[Standup] Calling AI provider: ' + aiCfg.provider + '...');
 
-  // Call AI
+  // Call AI (standup + social plan JSON)
   var aiContent;
   try {
-    aiContent = await callAi(cfg, prompt, { maxTokens: 2000 });
+    aiContent = await callAi(cfg, prompt, { maxTokens: 4500 });
     console.log('[Standup] AI response: ' + aiContent.length + ' chars');
   } catch(err) {
     var errMsg = extractAxiosErrorMessage(err);
@@ -585,14 +632,44 @@ async function generateStandup(opts) {
     return { success: false, reason: 'empty_response' };
   }
 
+  var parsed = parseSocialPlanFromResponse(aiContent);
+  var standupMarkdown = parsed.markdown;
+  var draftAppend = '';
+  var draftFiles = [];
+  if (parsed.tasks && parsed.tasks.length) {
+    try {
+      var draftRes = await runSocialDraftAgents(cfg, dateStr, parsed.tasks, ctxBundle);
+      draftAppend = draftRes.appendixMarkdown || '';
+      draftFiles = draftRes.files || [];
+    } catch (draftErr) {
+      console.error('[Standup] Social draft agents:', draftErr.message);
+    }
+  }
+  var finalContent = standupMarkdown + (draftAppend ? '\n\n' + draftAppend : '');
+
   // Create page
   console.log('[Standup] Creating Notion page...');
   try {
-    var page = await createDailyStandupPage(cfg, dateStr, aiContent);
+    var page = await createDailyStandupPage(cfg, dateStr, finalContent);
     var pageUrl = 'https://notion.so/' + page.id.replace(/-/g, '');
     console.log('[Standup] Page created: ' + pageUrl);
 
-    logActivity('standup', 'Generated for ' + dateStr + ' - ' + buildLogs.length + ' builds, ' + ideaLogs.length + ' ideas, ' + projects.length + ' projects, ' + socialSent.length + ' voice samples');
+    logActivity(
+      'standup',
+      'Generated for ' +
+        dateStr +
+        ' - ' +
+        buildLogs.length +
+        ' builds, ' +
+        ideaLogs.length +
+        ' ideas, ' +
+        projects.length +
+        ' projects, ' +
+        socialSent.length +
+        ' voice samples, ' +
+        draftFiles.length +
+        ' social draft file(s)'
+    );
 
     return {
       success: true,
@@ -600,7 +677,8 @@ async function generateStandup(opts) {
       url: pageUrl,
       date: dateStr,
       buildLogsCount: buildLogs.length,
-      ideaLogsCount: ideaLogs.length
+      ideaLogsCount: ideaLogs.length,
+      socialDraftFiles: draftFiles
     };
   } catch(err) {
     console.error('[Standup] Failed to create Notion page:', err.message);
@@ -624,4 +702,4 @@ if (require.main === module) {
     .catch(function(e) { console.error(e); process.exit(1); });
 }
 
-module.exports = { generateStandup, parseContentToBlocks };
+module.exports = { generateStandup, parseContentToBlocks, buildStandupContextBundle };

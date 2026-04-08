@@ -356,7 +356,7 @@
         <div class="form-group">
           <label>Standup database ID</label>
           <input type="text" id="cfg-standup-db" placeholder="UUID of the Notion database (each run adds a row)">
-          <div style="font-size:12px;color:var(--text-dim);margin-top:6px">Each run creates a page in this database. The title column is set to <span style="font-family:monospace">Daily Stand-up - YYYY-MM-DD</span>.</div>
+          <div style="font-size:12px;color:var(--text-dim);margin-top:6px">Each run creates a page in this database. The title column is set to <span style="font-family:monospace">Daily Stand-up - YYYY-MM-DD</span>. Add a <strong>Date</strong> property (type: date) so the standup date is filled automatically.</div>
         </div>
         <div class="form-group">
           <label>Sent posts / voice DB (optional)</label>
@@ -375,6 +375,11 @@
             <div class="form-group">
               <label>Port</label>
               <input type="number" id="cfg-port" value="3001">
+            </div>
+            <div class="form-group">
+              <label>Public base URL (for social draft links)</label>
+              <input type="text" id="cfg-public-url" placeholder="https://your-domain or ngrok URL — leave empty for localhost">
+              <div style="font-size:12px;color:var(--text-dim);margin-top:6px">Used in Notion links to generated markdown files. Or set <span style="font-family:monospace">PUBLIC_BASE_URL</span> in env.</div>
             </div>
           </div>
         </div>
@@ -598,6 +603,7 @@ async function loadDashboard() {
     document.getElementById('cfg-standup-db').value = cfg.notion?.standupDb || '';
     document.getElementById('cfg-social-db').value = cfg.notion?.socialMediaDb || '';
     document.getElementById('cfg-port').value = cfg.server?.port || 3001;
+    document.getElementById('cfg-public-url').value = cfg.server?.publicBaseUrl || '';
 
     // Recent log
     const logEl = document.getElementById('recent-log');
@@ -820,7 +826,8 @@ async function saveConfig() {
       socialMediaDb: document.getElementById('cfg-social-db').value.trim() || null
     },
     server: {
-      port: parseInt(document.getElementById('cfg-port').value)
+      port: parseInt(document.getElementById('cfg-port').value),
+      publicBaseUrl: document.getElementById('cfg-public-url').value.trim()
     }
   };
   await api('POST', '/api/config', cfg);
