@@ -359,35 +359,37 @@ async function saveDraftToNotion(cfg, properties) {
   var content = String(properties.content || '').trim();
   var dateStr = String(properties.date || new Date().toISOString().split('T')[0]).trim();
 
+  // "Content" is the title column in this DB; draft text goes in the page body
   var notionProps = {
-    Name: { title: [{ text: { content: title } }] }
+    Content: { title: [{ text: { content: title } }] }
   };
   if (platform) notionProps['Platform'] = { select: { name: platform } };
   if (contentType) notionProps['Content Type'] = { select: { name: contentType } };
-  if (content) notionProps['Content'] = { rich_text: [{ text: { content: content.slice(0, 2000) } }] };
   notionProps['Date'] = { date: { start: dateStr } };
 
-  // Link project relation if provided
   if (properties.projectId && String(properties.projectId).trim()) {
     notionProps['Project'] = { relation: [{ id: String(properties.projectId).trim() }] };
   }
 
-  var page = await notion.pages.create({
-    parent: { database_id: dbId },
-    properties: notionProps
+  // Split content into 2000-char chunks (Notion rich_text limit per block)
+  var chunks = [];
+  for (var i = 0; i < content.length; i += 2000) {
+    chunks.push(content.slice(i, i + 2000));
+  }
+  var bodyBlocks = chunks.map(function(chunk) {
+    return { object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: chunk } }] } };
   });
 
-  // Append full content as page body if it's long (over 2000 chars gets truncated in property)
-  if (content.length > 2000) {
+  var page = await notion.pages.create({
+    parent: { database_id: dbId },
+    properties: notionProps,
+    children: bodyBlocks.slice(0, 100)
+  });
+
+  // Append remaining blocks if content was very long
+  if (bodyBlocks.length > 100) {
     try {
-      await notion.blocks.children.append({
-        block_id: page.id,
-        children: [{
-          object: 'block',
-          type: 'paragraph',
-          paragraph: { rich_text: [{ type: 'text', text: { content: content.slice(0, 2000) } }] }
-        }]
-      });
+      await notion.blocks.children.append({ block_id: page.id, children: bodyBlocks.slice(100) });
     } catch (e) {}
   }
 

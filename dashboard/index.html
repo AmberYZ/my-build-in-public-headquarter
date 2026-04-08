@@ -560,7 +560,7 @@
           <input id="nd-goal" type="text" placeholder="What should this post accomplish?" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px;font-size:13px;" />
         </div>
         <div style="margin-bottom:10px">
-          <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px">Notes (optional)</label>
+          <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px">Instruction (optional)</label>
           <textarea id="nd-notes" rows="2" placeholder="Extra instructions, specific angle, tone notes…" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;resize:vertical;line-height:1.4"></textarea>
         </div>
         <div style="display:flex;gap:10px;align-items:center">
@@ -601,10 +601,6 @@
 <div id="publish-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:28px;width:480px;max-width:95vw;max-height:90vh;overflow-y:auto">
     <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:18px">Save to Notion</div>
-    <div style="margin-bottom:12px">
-      <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px">Title</label>
-      <input id="pub-title" type="text" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px;font-size:13px;" />
-    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
       <div>
         <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px">Platform *</label>
@@ -620,10 +616,6 @@
       <select id="pub-project" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px;font-size:13px">
         <option value="">— None —</option>
       </select>
-    </div>
-    <div style="margin-bottom:12px">
-      <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px">Content (paste final version) *</label>
-      <textarea id="pub-content" rows="6" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;resize:vertical;line-height:1.4" placeholder="Paste the final post content here…"></textarea>
     </div>
     <div style="margin-bottom:18px">
       <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px">Date</label>
@@ -1181,19 +1173,29 @@ async function loadSocialDrafts() {
           <span style="font-size:11px;padding:3px 8px;border-radius:4px;background:var(--surface2);color:var(--text-dim)">${escHtml(d.effort || 'low')}</span>
         </div>
         ${d.exists
-          ? `<div style="margin-bottom:10px"><a href="${escHtml(d.url)}" target="_blank" style="color:var(--accent);font-size:13px;text-decoration:none;">↗ Open draft</a></div>`
+          ? `<pre id="social-body-${d.taskIndex}" style="white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:13px;line-height:1.55;background:var(--surface2);border:1px solid var(--border-soft);border-radius:8px;padding:12px 14px;max-height:220px;overflow-y:auto;margin-bottom:10px;color:var(--text-dim)">Loading…</pre>`
           : `<div style="margin-bottom:10px;color:var(--text-muted);font-size:12px;">Draft file not yet generated</div>`}
         <div style="margin-bottom:8px">
-          <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px">Extra instructions (optional)</label>
-          <textarea id="social-instr-${d.taskIndex}" rows="2" placeholder="e.g. make it shorter, focus on the technical angle, more casual tone…" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;resize:vertical;line-height:1.4"></textarea>
+          <input id="social-instr-${d.taskIndex}" type="text" placeholder="Regenerate instructions (optional)" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;" />
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn btn-primary btn-sm" id="social-regen-btn-${d.taskIndex}" onclick="regenerateDraft(${d.taskIndex}, '${escHtml(date)}')">↻ Regenerate</button>
-          ${d.exists ? `<button class="btn btn-success btn-sm" id="social-publish-btn-${d.taskIndex}" onclick="openPublishModal(${d.taskIndex}, '${escHtml(date)}', '${escHtml(d.channel)}', '${escHtml(d.format)}')">↑ Save to Notion</button>` : ''}
-          <button class="btn btn-ghost btn-sm" onclick="skipSocialDraft(${d.taskIndex})" style="color:var(--text-muted)">✕ Skip</button>
+          ${d.exists ? `<button class="btn btn-success btn-sm" id="social-publish-btn-${d.taskIndex}" onclick="openPublishModal(${d.taskIndex}, '${escHtml(date)}', '${escHtml(d.channel)}', '${escHtml(d.format)}', '${escHtml(d.fname)}')">↑ Save to Notion</button>` : ''}
+          <button class="btn btn-ghost btn-sm" onclick="skipSocialDraft(${d.taskIndex}, '${escHtml(d.fname)}')" style="color:var(--text-muted)">✕ Skip</button>
         </div>
       </div>
     `).join('');
+
+    // Fetch and display draft content inline
+    r.drafts.filter(d => d.exists).forEach(d => {
+      fetch(d.url).then(res => res.text()).then(text => {
+        const el = document.getElementById('social-body-' + d.taskIndex);
+        if (el) el.textContent = text.trim();
+      }).catch(() => {
+        const el = document.getElementById('social-body-' + d.taskIndex);
+        if (el) el.textContent = '(could not load draft)';
+      });
+    });
   } catch (err) {
     container.innerHTML = '<div class="card" style="color:var(--red);font-size:13px;">' + escHtml(err.message) + '</div>';
   }
@@ -1203,12 +1205,15 @@ function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function skipSocialDraft(taskIndex) {
+async function skipSocialDraft(taskIndex, fname) {
   const card = document.getElementById('social-draft-card-' + taskIndex);
   if (card) {
     card.style.transition = 'opacity 0.2s';
     card.style.opacity = '0';
     setTimeout(() => { card.style.display = 'none'; }, 200);
+  }
+  if (fname) {
+    try { await fetch(API + '/api/social-drafts/' + encodeURIComponent(fname), { method: 'DELETE' }); } catch (e) {}
   }
 }
 
@@ -1222,10 +1227,12 @@ async function regenerateDraft(taskIndex, date) {
   try {
     const r = await api('POST', '/api/social-drafts/regenerate', { date, taskIndex, extraInstructions });
     showToast('Draft regenerated!', 'success');
-    // Update the open link
-    const card = document.getElementById('social-draft-card-' + taskIndex);
-    const linkEl = card && card.querySelector('a[target="_blank"]');
-    if (linkEl) linkEl.href = r.url;
+    // Refresh inline preview
+    const preEl = document.getElementById('social-body-' + taskIndex);
+    if (preEl) {
+      preEl.textContent = 'Loading…';
+      fetch(r.url).then(res => res.text()).then(text => { preEl.textContent = text.trim(); }).catch(() => {});
+    }
   } catch (err) {
     showToast('Regeneration failed: ' + err.message, 'error');
   } finally {
@@ -1272,12 +1279,10 @@ async function createNewDraftFromForm() {
 
 let _publishModalState = {};
 
-async function openPublishModal(taskIndex, date, channel, format) {
-  _publishModalState = { taskIndex, date, channel, format };
-  document.getElementById('pub-title').value = channel + ' ' + format + ' — ' + date;
+async function openPublishModal(taskIndex, date, channel, format, fname) {
+  _publishModalState = { taskIndex, date, channel, format, fname };
   document.getElementById('pub-platform').value = channel;
   document.getElementById('pub-content-type').value = format;
-  document.getElementById('pub-content').value = '';
   document.getElementById('pub-date').value = date;
 
   // Load projects into select
@@ -1301,20 +1306,19 @@ function closePublishModal() {
 }
 
 async function submitPublish() {
-  const title = document.getElementById('pub-title').value.trim();
   const platform = document.getElementById('pub-platform').value.trim();
   const contentType = document.getElementById('pub-content-type').value.trim();
   const projectId = document.getElementById('pub-project').value;
-  const content = document.getElementById('pub-content').value.trim();
   const date = document.getElementById('pub-date').value;
-  if (!content) { showToast('Content is required', 'error'); return; }
+  const { fname, channel, format } = _publishModalState;
+  const title = [channel, format, date].filter(Boolean).join(' — ');
   if (!platform) { showToast('Platform is required', 'error'); return; }
   const btn = document.getElementById('btn-pub-save');
   const orig = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Saving…';
   try {
-    const r = await api('POST', '/api/social-drafts/publish', { title, platform, contentType, projectId, content, date });
+    const r = await api('POST', '/api/social-drafts/publish', { title, platform, contentType, projectId, date, fname });
     showToast('Saved to Notion!', 'success');
     closePublishModal();
   } catch (err) {

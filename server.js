@@ -352,11 +352,25 @@ app.post('/api/social-drafts/create', async (req, res) => {
 app.post('/api/social-drafts/publish', async (req, res) => {
   try {
     const freshCfg = load();
-    const { title, platform, contentType, projectId, content, date } = req.body || {};
-    if (!content) return res.status(400).json({ error: 'content is required' });
+    const { title, platform, contentType, projectId, date, fname } = req.body || {};
+    if (!fname) return res.status(400).json({ error: 'fname is required' });
+    const fpath = path.join(DRAFTS_DIR, path.basename(fname));
+    if (!fs.existsSync(fpath)) return res.status(404).json({ error: 'Draft file not found: ' + fname });
+    const content = fs.readFileSync(fpath, 'utf8').trim();
     const result = await saveDraftToNotion(freshCfg, { title, platform, contentType, projectId, content, date });
     logActivity('social_publish', `Saved social post to Notion: ${platform} / ${contentType}`);
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/social-drafts/:fname', (req, res) => {
+  try {
+    const fname = path.basename(req.params.fname);
+    const fpath = path.join(DRAFTS_DIR, fname);
+    if (fs.existsSync(fpath)) fs.unlinkSync(fpath);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
