@@ -79,6 +79,8 @@
   .stat-card.orange { border-color: var(--orange-dim); }
   .stat-card.orange .stat-value { color: var(--orange); }
 
+  .card.north-star { border-color: var(--purple-dim); background: linear-gradient(135deg, var(--surface) 0%, rgba(184,123,255,0.06) 100%); }
+
   /* Project status breakdown */
   .project-status-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .project-status-pill { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim); }
@@ -215,11 +217,11 @@
   <!-- Main -->
   <main class="main">
 
-    <!-- ─── Dashboard ─── -->
+    <!-- ─── Build-in-public HQ (dashboard) ─── -->
     <div class="section active" id="section-dashboard">
       <div class="page-header">
-        <h2>Dashboard</h2>
-        <p>Overview of your build-in-public activity</p>
+        <h2>Build-in-public HQ</h2>
+        <p>Routines, standup context, and overview of your build-in-public activity</p>
       </div>
 
       <!-- Project overview stats -->
@@ -277,7 +279,21 @@
         </div>
       </div>
 
-      <!-- Today's Blocker / Goal -->
+      <!-- North star + today's focus (fed into standup AI) -->
+      <h3>My north star</h3>
+      <div class="card north-star">
+        <div class="card-header" style="margin-bottom:10px">
+          <div>
+            <div class="card-title">What are you ultimately building toward?</div>
+            <div class="card-subtitle">Long-term direction, not today's task list. The standup uses this as <code style="font-family:monospace">{NORTH_STAR}</code> to align todos, idea prioritization (🔴/🟡/⚪/❌), new angles, and social suggestions.</div>
+          </div>
+        </div>
+        <textarea id="dashboard-north-star" rows="4" placeholder="Examples: sustainable indie products people rely on; become the go-to voice on X for ___; ship one meaningful project per quarter while staying healthy…" style="min-height:unset"></textarea>
+        <div class="btn-row">
+          <button class="btn btn-primary btn-sm" onclick="saveNorthStar()">Save</button>
+        </div>
+      </div>
+
       <h3>Today's Focus</h3>
       <div class="card">
         <div class="card-header" style="margin-bottom:10px">
@@ -568,6 +584,7 @@
           <select id="nd-effort" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px">
             <option value="low">Low (short post)</option>
             <option value="high">High (long-form / thread)</option>
+            <option value="higher-level">Higher-level (article / Substack)</option>
           </select>
           <button class="btn btn-primary btn-sm" id="btn-nd-generate" onclick="createNewDraftFromForm()" style="margin-left:auto">Generate</button>
           <button class="btn btn-ghost btn-sm" onclick="toggleNewDraftForm()">Cancel</button>
@@ -800,6 +817,7 @@ async function loadDashboard() {
       </label>
     `).join('');
 
+    document.getElementById('dashboard-north-star').value = cfg.standup?.northStar || '';
     document.getElementById('dashboard-blocker').value = cfg.standup?.biggestBlocker || '';
 
     // AI provider
@@ -946,6 +964,12 @@ async function saveStandupPreferences() {
   const writingTone = document.getElementById('standup-tone').value.trim();
   await api('POST', '/api/config', { standup: { ideaTypes: checked, userNickname, writingTone } });
   showToast('Standup preferences saved!', 'success');
+}
+
+async function saveNorthStar() {
+  const northStar = document.getElementById('dashboard-north-star').value;
+  await api('POST', '/api/config', { standup: { northStar } });
+  showToast('North star saved — standup will use it on the next run.', 'success');
 }
 
 async function saveTodayBlocker() {
@@ -1212,8 +1236,17 @@ async function skipSocialDraft(taskIndex, fname) {
     card.style.opacity = '0';
     setTimeout(() => { card.style.display = 'none'; }, 200);
   }
-  if (fname) {
-    try { await fetch(API + '/api/social-drafts/' + encodeURIComponent(fname), { method: 'DELETE' }); } catch (e) {}
+  const dateEl = document.getElementById('social-date');
+  const date = dateEl ? dateEl.value : new Date().toISOString().split('T')[0];
+  try {
+    await api('POST', '/api/social-drafts/skip', { date, taskIndex });
+    showToast('Draft skipped and removed', 'success');
+    loadSocialDrafts();
+  } catch (err) {
+    showToast('Skip failed: ' + err.message, 'error');
+    if (fname) {
+      try { await fetch(API + '/api/social-drafts/' + encodeURIComponent(fname), { method: 'DELETE' }); } catch (e) {}
+    }
   }
 }
 

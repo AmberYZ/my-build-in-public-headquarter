@@ -636,6 +636,11 @@ function buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSen
     ? (cfg.standup.ideaTypes || []).join(', ')
     : '(none selected — balance across technical, business, and content)';
 
+  var northStarRaw = (cfg.standup && cfg.standup.northStar) ? String(cfg.standup.northStar).trim() : '';
+  var northStarText = northStarRaw
+    ? northStarRaw
+    : 'None specified — do not invent a north star; infer direction only from projects, builds, and ideas.';
+
   var blockerRaw = (cfg.standup && cfg.standup.biggestBlocker) ? String(cfg.standup.biggestBlocker).trim() : '';
   var blockerText = blockerRaw || 'None specified — infer likely friction only from build logs, ideas, and projects; do not invent a fake blocker.';
 
@@ -655,6 +660,7 @@ function buildStandupContextBundle(cfg, buildLogs, ideaLogs, projects, socialSen
     ideaMaxRows: ideaMaxRows,
     ideaFetchBlurb: ideaFetchBlurb,
     ideaTypesStr: ideaTypesStr,
+    northStarText: northStarText,
     blockerText: blockerText,
     projectsText: projectsText,
     socialText: socialText,
@@ -698,6 +704,15 @@ function buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent, recentStand
     .replace('{BIGGEST_BLOCKER}', ctx.blockerText)
     .replace('{SOCIAL_SENT_POSTS}', ctx.socialText);
 
+  var northStarRawCfg = (cfg.standup && cfg.standup.northStar) ? String(cfg.standup.northStar).trim() : '';
+  if (prompt.indexOf('{NORTH_STAR}') !== -1) {
+    prompt = prompt.replace('{NORTH_STAR}', ctx.northStarText);
+  } else if (northStarRawCfg) {
+    prompt +=
+      '\n\n⭐ MY NORTH STAR (user-defined in HQ — weight heavily for todos, idea statuses, and social angles):\n' +
+      ctx.northStarText;
+  }
+
   if (prompt.indexOf('{RECENT_STANDUPS_CONTEXT}') !== -1) {
     prompt = prompt.replace('{RECENT_STANDUPS_CONTEXT}', ctx.recentStandupsText);
   } else {
@@ -707,6 +722,121 @@ function buildPrompt(cfg, buildLogs, ideaLogs, projects, socialSent, recentStand
   }
 
   return prompt;
+}
+
+function toLowerText(v) {
+  return String(v || '')
+    .toLowerCase()
+    .trim();
+}
+
+function normalizeSocialTask(task) {
+  task = task || {};
+  var channel = String(task.channel || 'Twitter/X').trim() || 'Twitter/X';
+  var format = String(task.format || 'post').trim() || 'post';
+  var goal = String(task.goal || '').trim();
+  var rawEffort = toLowerText(task.effort);
+  var effort =
+    rawEffort === 'higher-level' || rawEffort === 'higher level' || rawEffort === 'higher_level'
+      ? 'higher-level'
+      : rawEffort === 'high'
+      ? 'high'
+      : 'low';
+  var notes = String(task.notes || '').trim();
+
+  var lkChannel = toLowerText(channel);
+  var lkFormat = toLowerText(format);
+  var shortFirst = lkChannel.indexOf('twitter') !== -1 || lkChannel.indexOf('x') === 0 || lkChannel.indexOf('substack') !== -1;
+  var explicitLong = effort === 'high' || effort === 'higher-level';
+  var looksLongFormat =
+    lkFormat.indexOf('article') !== -1 ||
+    lkFormat.indexOf('essay') !== -1 ||
+    lkFormat.indexOf('blog') !== -1 ||
+    lkFormat.indexOf('newsletter') !== -1 ||
+    lkFormat.indexOf('long') !== -1;
+
+  // Prefer short, quick-to-post drafts by default unless a long-form effort was explicitly requested.
+  if (shortFirst && !explicitLong) {
+    effort = 'low';
+    if (lkChannel.indexOf('substack') !== -1) {
+      format = 'note';
+    } else if (lkFormat.indexOf('thread') !== -1 || lkFormat.indexOf('article') !== -1) {
+      format = 'post';
+    }
+  }
+  if (looksLongFormat && !explicitLong) {
+    effort = 'higher-level';
+  }
+
+  return {
+    channel: channel,
+    format: format,
+    goal: goal || 'Share one concrete update from recent work.',
+    effort: effort,
+    notes: notes
+  };
+}
+
+function buildRoutineFallbackSocialTasks() {
+  return [
+    {
+      channel: 'Twitter/X',
+      format: 'post',
+      goal: 'Share what I shipped recently and why it matters.',
+      effort: 'low',
+      notes: 'Keep it punchy, include one concrete artifact (screenshot/GIF/link), end with what changed for users.'
+    },
+    {
+      channel: 'Twitter/X',
+      format: 'post',
+      goal: 'Share one learning from building and one practical takeaway.',
+      effort: 'low',
+      notes: 'One lesson + one example. No preachy tone. Sound like a builder note.'
+    },
+    {
+      channel: 'Twitter/X',
+      format: 'post',
+      goal: 'Share current struggle/blocker and how I am working through it.',
+      effort: 'low',
+      notes: 'Be honest and specific. Mention the constraint and next experiment.'
+    },
+    {
+      channel: 'Substack',
+      format: 'note',
+      goal: 'Share one new idea I want to test this week.',
+      effort: 'low',
+      notes: 'Short note style: context, idea, test plan in 2-4 sentences.'
+    }
+  ];
+}
+
+function finalizeSocialTasksForRoutine(tasks, cfg) {
+  var normalized = [];
+  for (var i = 0; i < (tasks || []).length; i++) {
+    var t = tasks[i];
+    if (!t || typeof t !== 'object') continue;
+    normalized.push(normalizeSocialTask(t));
+  }
+
+  var standupCfg = (cfg && cfg.standup) || {};
+  var minCount = Number(standupCfg.socialDraftMinCount);
+  var maxCount = Number(standupCfg.socialDraftMaxCount);
+  if (!Number.isFinite(minCount) || minCount < 1) minCount = 4;
+  if (!Number.isFinite(maxCount) || maxCount < minCount) maxCount = 4;
+
+  if (normalized.length < minCount) {
+    var fallback = buildRoutineFallbackSocialTasks();
+    var need = minCount - normalized.length;
+    for (var j = 0; j < need; j++) {
+      normalized.push(normalizeSocialTask(fallback[j % fallback.length]));
+    }
+  }
+
+  if (normalized.length > maxCount) {
+    normalized = normalized.slice(0, maxCount);
+  }
+
+  return normalized;
 }
 
 var NOTION_BLOCK_BATCH = 100;
@@ -1221,6 +1351,7 @@ async function generateStandup(opts) {
   }
 
   var parsed = parseSocialPlanFromResponse(aiContent);
+  parsed.tasks = finalizeSocialTasksForRoutine(parsed.tasks, cfg);
   var standupMarkdown = stripUiLegendFromStandupMarkdown(parsed.markdown);
   var draftAppend = '';
   var draftFiles = [];

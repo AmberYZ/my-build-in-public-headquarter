@@ -295,13 +295,15 @@ app.get('/api/social-drafts/list', (req, res) => {
     }
     const base = publicBaseUrl(freshCfg);
     const drafts = (plan.tasks || []).map((t, i) => {
-      const high = String(t.effort || '').toLowerCase() === 'high';
+      if (t && t.skipped === true) return null;
+      const effort = String(t.effort || '').toLowerCase().trim();
+      const suffix = effort === 'low' ? '_short' : effort === 'higher-level' ? '_higher_level' : '';
       const fname =
         date +
         '_' + String(i + 1).padStart(2, '0') +
         '_' + slugPart(t.channel) +
         '_' + slugPart(t.format) +
-        (high ? '' : '_short') + '.md';
+        suffix + '.md';
       const fpath = path.join(DRAFTS_DIR, fname);
       return {
         taskIndex: i,
@@ -314,7 +316,7 @@ app.get('/api/social-drafts/list', (req, res) => {
         goal: t.goal,
         notes: t.notes
       };
-    });
+    }).filter(Boolean);
     res.json({ date, tasks: plan.tasks || [], drafts });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -371,6 +373,56 @@ app.delete('/api/social-drafts/:fname', (req, res) => {
     const fpath = path.join(DRAFTS_DIR, fname);
     if (fs.existsSync(fpath)) fs.unlinkSync(fpath);
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/social-drafts/skip', (req, res) => {
+  try {
+    const { date, taskIndex } = req.body || {};
+    if (!date) return res.status(400).json({ error: 'date is required' });
+    if (taskIndex == null) return res.status(400).json({ error: 'taskIndex is required' });
+
+    const idx = Number(taskIndex);
+    if (!Number.isInteger(idx) || idx < 0) return res.status(400).json({ error: 'taskIndex must be a non-negative integer' });
+
+    const planPath = path.join(DRAFTS_DIR, date + '_social_plan.json');
+    if (!fs.existsSync(planPath)) return res.status(404).json({ error: 'No social plan found for ' + date });
+
+    let plan;
+    try {
+      plan = JSON.parse(fs.readFileSync(planPath, 'utf8'));
+    } catch (e) {
+      return res.status(500).json({ error: 'Could not parse social plan: ' + e.message });
+    }
+
+    const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
+    if (idx >= tasks.length) return res.status(400).json({ error: `taskIndex ${idx} out of range (plan has ${tasks.length} tasks)` });
+    const t = tasks[idx] || {};
+
+    const effort = String(t.effort || '').toLowerCase().trim();
+    const suffix = effort === 'low' ? '_short' : effort === 'higher-level' ? '_higher_level' : '';
+    const fname =
+      date +
+      '_' +
+      String(idx + 1).padStart(2, '0') +
+      '_' +
+      slugPart(t.channel) +
+      '_' +
+      slugPart(t.format) +
+      suffix +
+      '.md';
+    const fpath = path.join(DRAFTS_DIR, fname);
+    if (fs.existsSync(fpath)) fs.unlinkSync(fpath);
+
+    // Mark as skipped so card disappears while preserving stable indices for existing files/tasks.
+    tasks[idx] = Object.assign({}, t, { skipped: true });
+    plan.tasks = tasks;
+    fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), 'utf8');
+
+    logActivity('social_skip', `Skipped social draft ${idx} for ${date}`);
+    res.json({ ok: true, skippedTaskIndex: idx, deletedFile: fname });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

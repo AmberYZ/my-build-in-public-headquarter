@@ -20,6 +20,8 @@ const DEFAULT_CONFIG = {
     userNickname: '',
     /** How the AI should write to you (e.g. "direct and motivating", "warm mentor-like", "no-nonsense"). Injected as {WRITING_TONE}. */
     writingTone: '',
+    /** Free text: long-term direction / success definition (HQ "My north star"). Injected as {NORTH_STAR}. */
+    northStar: '',
     /** Free text: current friction (e.g. unclear next step, distribution, storytelling). Injected as {BIGGEST_BLOCKER}. */
     biggestBlocker: '',
     /** When ideaLogFetchMode is "lookback": only ideas created in the last N days. Ignored when mode is "all". */
@@ -47,9 +49,11 @@ const DEFAULT_CONFIG = {
 ## How to think (do this before writing)
 1. Infer strategy from the data only. Do not assume a fixed playbook. Name what they care about this week in plain language.
 
+1b. **MY NORTH STAR:** When the data block includes a non-empty north star, treat it as the top-level compass for the whole standup. Daily todos should clearly advance or protect it; idea backlog statuses (🔴🟡⚪❌) should reflect alignment or tension with it; social angles should reinforce it without sounding preachy. If an idea or task fights the north star, say so honestly (❌ or ⚪ with a crisp reason). If north star is empty, do not invent one.
+
 2. Project pages are ground truth for goals and scope.
 
-3. Rank work by what fits their thread now vs later. RECENT IDEAS lists only **open** ideas (not checked off / not Status Done).
+3. Rank work by what fits their thread now vs later — **after** weighing the north star when present. RECENT IDEAS lists only **open** ideas (not checked off / not Status Done).
 
 3b. When IDEA_COUNT is at least 1, every idea row (1/N through N/N) must appear once in the idea backlog section with a clear status and one-line why. Say "insufficient context" only if you truly lack signal. Parked is a suggestion—the user can override.
 
@@ -76,10 +80,10 @@ const DEFAULT_CONFIG = {
 Then output the standup in this order (body sections only—start with section 1, nothing before it):
 
 ## 🎯 Intention & how today's plan was built
-First section. Next line: :::ai then flowing prose (3–5 sentences max), then ::: on its own line. Cover three things concisely: (1) 1–2 sentences on what the user accomplished or shipped in the past week based on build logs and prior standups; (2) what you infer they want to push forward today; (3) briefly how you weighted today's todos (which project/idea, why now). No subheadings, no bullet lists, no "transparency" prose.
+First section. Next line: :::ai then flowing prose (3–5 sentences max), then ::: on its own line. Cover three things concisely: (1) 1–2 sentences on what the user accomplished or shipped in the past week based on build logs and prior standups; (2) what you infer they want to push forward today; (3) briefly how you weighted today's todos (which project/idea, why now) **and**, when MY NORTH STAR is non-empty in the data, how that star shaped the plan. No subheadings, no bullet lists, no "transparency" prose.
 
 ## ✅ Today's TODO List
-Second section. Do NOT wrap this section in :::ai or any fence. Output the items directly as bare "- [ ] …" lines so they render as Notion checkboxes. At most 3 items. Sub-bullets for drafts where needed. **If any ideas are marked "prioritized today" in the idea backlog review, at least one todo must come from or directly support that idea.**
+Second section. Do NOT wrap this section in :::ai or any fence. Output the items directly as bare "- [ ] …" lines so they render as Notion checkboxes. At most 3 items. Sub-bullets for drafts where needed. **If any ideas are marked "prioritized today" in the idea backlog review, at least one todo must come from or directly support that idea.** When MY NORTH STAR is specified in the data, at least one todo should visibly move the north star forward (or remove a blocker to it); say how in the todo wording.
 
 ## 📋 Idea backlog review (full pass)
 Third section, only if IDEA_COUNT is at least 1. Do NOT wrap this section in :::ai or any fence — output everything as bare lines so each renders as its own block. Opening sentence must state the exact IDEA_COUNT from the data block and confirm you are reviewing every listed idea (1/N through N/N). One bullet per idea, emoji first, in this exact format:
@@ -105,13 +109,16 @@ Fourth section. Next line: :::you. Two parts only: (1) a short natural-language 
 One resource or one skipped line.
 
 ## 📝 Social & distribution
-Short angles and a compact plan (channel, format, goal, effort high or low). No long drafts here. For voice, lean on the real posts in the Content database block below—not generic creator tone.
+Short angles and a compact plan (channel, format, goal, effort low/high/higher-level). No long drafts here. For voice, lean on the real posts in the Content database block below—not generic creator tone. When MY NORTH STAR is set, bias channels and angles toward posts that reinforce that direction (still concrete and human, not manifesto tone).
 
-Effort rules for the JSON plan: Twitter/X posts about real work, builds, or progress → effort "high" (enables full thread or long-form tweet). Only mark "low" for simple reposts, quick replies, or minimal-context captions. When in doubt, default to "high" for Twitter. The format field should specify "thread" when a multi-tweet format fits the content.
+Effort rules for the JSON plan:
+- Use "low" for quick short posts/replies/notes.
+- Use "high" for long tweets or full threads.
+- Use "higher-level" for full long-form composition (article, Substack post, or deep essay-style post).
 
 End the entire response with the machine block on its own lines (nothing after the JSON array):
 ---SOCIAL_PLAN_JSON---
-[{"channel":"…","format":"…","goal":"…","effort":"high","notes":"…"}]
+[{"channel":"…","format":"…","goal":"…","effort":"higher-level","notes":"…"}]
 
 ---
 📦 RECENT BUILD LOGS:
@@ -130,6 +137,9 @@ End the entire response with the machine block on its own lines (nothing after t
 
 🎯 IDEA TYPES TO PRIORITIZE:
 {IDEA_TYPES}
+
+⭐ MY NORTH STAR (long-term direction — from HQ dashboard; empty means none set):
+{NORTH_STAR}
 
 🚧 BIGGEST BLOCKER OR FRICTION LATELY:
 {BIGGEST_BLOCKER}

@@ -56,10 +56,44 @@ function parseSocialPlanFromResponse(fullText) {
   return { markdown: markdown, tasks: tasks };
 }
 
-function buildWriterPrompt(ctx, task, isHigh) {
-  var lengthRule = isHigh
-    ? '\nLENGTH: Long-form. For Twitter/X: write a full thread (6–15 tweets, numbered 1/, 2/, etc.) or a single long tweet (up to 280 chars) — whichever matches how they post. For other channels: essay, script, or full post. Do not cut short.\n'
-    : '\nLENGTH: Short-form — but still complete and self-contained. A single tweet, caption, or tight 3-tweet mini-thread. No filler, but do not truncate mid-thought.\n';
+function normalizeEffort(task) {
+  var eff = String((task && task.effort) || '')
+    .toLowerCase()
+    .trim();
+  if (eff === 'higher-level' || eff === 'higher level' || eff === 'higher_level') return 'higher-level';
+  if (eff === 'high') return 'high';
+  return 'low';
+}
+
+function isArticleLikeTask(task, effortTier) {
+  var ch = String((task && task.channel) || '')
+    .toLowerCase()
+    .trim();
+  var fmt = String((task && task.format) || '')
+    .toLowerCase()
+    .trim();
+  if (effortTier === 'higher-level') return true;
+  if (ch.indexOf('substack') !== -1) return true;
+  return (
+    fmt.indexOf('article') !== -1 ||
+    fmt.indexOf('essay') !== -1 ||
+    fmt.indexOf('blog') !== -1 ||
+    fmt.indexOf('newsletter') !== -1 ||
+    fmt.indexOf('long') !== -1
+  );
+}
+
+function buildWriterPrompt(ctx, task, effortTier) {
+  var articleLike = isArticleLikeTask(task, effortTier);
+  var lengthRule =
+    articleLike
+      ? '\nLENGTH: Higher-level long-form. Write a full, publishable long-form piece (target 1200-2200 words; never under 900 words) with a clear narrative arc, concrete examples, and practical takeaways. For Substack/article formats, this should be near-ready to publish with a strong opening, developed middle, and concise ending.\n'
+      : effortTier === 'high'
+      ? '\nLENGTH: Long-form. For Twitter/X: write a full thread (12-24 tweets, numbered 1/, 2/, etc.) with concrete details and examples. For other channels: write a substantial long post (target 600-1200 words; never under 450 words). Do not cut short.\n'
+      : '\nLENGTH: Short-form — but still complete and self-contained. A single tweet, caption, or tight 3-tweet mini-thread. No filler, but do not truncate mid-thought.\n';
+  var articleRules = articleLike
+    ? '\nARTICLE MODE (important): This is NOT a Twitter thread. Do not number paragraphs, do not write tweet-style one-liners, and do not format as short punchy fragments. Write cohesive prose in full paragraphs with smooth transitions. Include: title, strong opening hook, 3-5 substantial sections, concrete examples from the work context, and a concise closing takeaway.\n'
+    : '';
 
   return (
     'You are ghostwriting for ONE specific person. Your only job is to sound exactly like them — not like an AI, not like a LinkedIn creator, not like anyone else.\n\n' +
@@ -78,6 +112,7 @@ function buildWriterPrompt(ctx, task, isHigh) {
     (task.channel || 'the channel') +
     '. No preamble, no meta-commentary, no "here\'s your draft" — just the post itself.' +
     lengthRule +
+    articleRules +
     '\n--- YOUR PUBLISHED CONTENT (the only voice that matters) ---\n' +
     ctx.socialText +
     '\n\n--- TASK ---\n' +
@@ -91,7 +126,7 @@ function buildWriterPrompt(ctx, task, isHigh) {
     (task.goal || '') +
     '\n' +
     'Effort: ' +
-    (isHigh ? 'high (long)' : 'low (short)') +
+    effortTier +
     '\n' +
     'Angle / notes: ' +
     (task.notes || '') +
@@ -109,19 +144,16 @@ function buildWriterPrompt(ctx, task, isHigh) {
     ctx.projectsText +
     '\n\nIdea type preferences: ' +
     ctx.ideaTypesStr +
+    '\nNorth star (when set, angle posts so they reinforce this direction; if empty line below says none, ignore): ' +
+    (ctx.northStarText || '(none)') +
     '\nBlocker: ' +
     ctx.blockerText +
     '\n'
   );
 }
 
-function isHighEffort(task) {
-  if (!task) return false;
-  return String(task.effort || '').toLowerCase() === 'high';
-}
-
 /**
- * Run one AI call per social plan item (parallel): long drafts for high effort, short for low.
+ * Run one AI call per social plan item (parallel): short/long/higher-level drafts by effort tier.
  * Writes markdown files under social-drafts/ and returns appendix + file list.
  */
 async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
@@ -136,16 +168,24 @@ async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
     return { appendixMarkdown: '', files: [] };
   }
 
-  var highCount = draftList.filter(function(e) {
-    return isHighEffort(e.task);
-  }).length;
+  var highCount = 0;
+  var higherLevelCount = 0;
+  var shortCount = 0;
+  for (var hi = 0; hi < draftList.length; hi++) {
+    var tier = normalizeEffort(draftList[hi].task);
+    if (tier === 'higher-level') higherLevelCount++;
+    else if (tier === 'high') highCount++;
+    else shortCount++;
+  }
   console.log(
     '[Standup] Social draft agents: ' +
       draftList.length +
       ' item(s) (' +
+      higherLevelCount +
+      ' higher-level, ' +
       highCount +
       ' high-effort, ' +
-      (draftList.length - highCount) +
+      shortCount +
       ' short)…'
   );
 
@@ -154,7 +194,7 @@ async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
       return (async function() {
         var t = entry.task;
         var n = entry.order;
-        var high = isHighEffort(t);
+        var effortTier = normalizeEffort(t);
         var fname =
           dateStr +
           '_' +
@@ -163,17 +203,18 @@ async function runSocialDraftAgents(cfg, dateStr, tasks, ctxBundle) {
           slugPart(t.channel) +
           '_' +
           slugPart(t.format) +
-          (high ? '' : '_short') +
+          (effortTier === 'higher-level' ? '_higher_level' : effortTier === 'low' ? '_short' : '') +
           '.md';
         var fpath = path.join(DRAFTS_DIR, fname);
-        var prompt = buildWriterPrompt(ctxBundle, t, high);
+        var prompt = buildWriterPrompt(ctxBundle, t, effortTier);
         var draftTemp =
           cfg.standup && typeof cfg.standup.socialDraftTemperature === 'number'
             ? cfg.standup.socialDraftTemperature
             : 0.55;
         try {
+          var maxTokens = effortTier === 'higher-level' ? 12000 : effortTier === 'high' ? 7000 : 1800;
           var body = await callAi(cfg, prompt, {
-            maxTokens: high ? 4500 : 1800,
+            maxTokens: maxTokens,
             temperature: draftTemp
           });
           body = (body || '').trim();
@@ -268,7 +309,7 @@ async function regenerateSingleDraft(cfg, dateStr, taskIndex, extraInstructions)
   var { fetchContextBundle } = require('./standup-generator');
   var ctxBundle = await fetchContextBundle(cfg, dateStr);
 
-  var high = isHighEffort(task);
+  var effortTier = normalizeEffort(task);
   var n = taskIndex + 1;
   var fname =
     dateStr +
@@ -278,16 +319,19 @@ async function regenerateSingleDraft(cfg, dateStr, taskIndex, extraInstructions)
     slugPart(task.channel) +
     '_' +
     slugPart(task.format) +
-    (high ? '' : '_short') +
+    (effortTier === 'higher-level' ? '_higher_level' : effortTier === 'low' ? '_short' : '') +
     '.md';
   var fpath = path.join(DRAFTS_DIR, fname);
-  var prompt = buildWriterPrompt(ctxBundle, task, high);
+  var prompt = buildWriterPrompt(ctxBundle, task, effortTier);
   var draftTemp =
     cfg.standup && typeof cfg.standup.socialDraftTemperature === 'number'
       ? cfg.standup.socialDraftTemperature
       : 0.55;
 
-  var body = await callAi(cfg, prompt, { maxTokens: high ? 4500 : 1800, temperature: draftTemp });
+  var body = await callAi(cfg, prompt, {
+    maxTokens: effortTier === 'higher-level' ? 12000 : effortTier === 'high' ? 7000 : 1800,
+    temperature: draftTemp
+  });
   body = (body || '').trim();
   fs.writeFileSync(fpath, body, 'utf8');
   var base = publicBaseUrl(cfg);
@@ -315,7 +359,7 @@ async function createNewDraft(cfg, dateStr, task) {
   var { fetchContextBundle } = require('./standup-generator');
   var ctxBundle = await fetchContextBundle(cfg, dateStr);
 
-  var high = isHighEffort(task);
+  var effortTier = normalizeEffort(task);
   var n = taskIndex + 1;
   var fname =
     dateStr +
@@ -325,15 +369,18 @@ async function createNewDraft(cfg, dateStr, task) {
     slugPart(task.channel) +
     '_' +
     slugPart(task.format) +
-    (high ? '' : '_short') +
+    (effortTier === 'higher-level' ? '_higher_level' : effortTier === 'low' ? '_short' : '') +
     '.md';
   var fpath = path.join(DRAFTS_DIR, fname);
-  var prompt = buildWriterPrompt(ctxBundle, task, high);
+  var prompt = buildWriterPrompt(ctxBundle, task, effortTier);
   var draftTemp =
     cfg.standup && typeof cfg.standup.socialDraftTemperature === 'number'
       ? cfg.standup.socialDraftTemperature
       : 0.55;
-  var body = await callAi(cfg, prompt, { maxTokens: high ? 4500 : 1800, temperature: draftTemp });
+  var body = await callAi(cfg, prompt, {
+    maxTokens: effortTier === 'higher-level' ? 12000 : effortTier === 'high' ? 7000 : 1800,
+    temperature: draftTemp
+  });
   body = (body || '').trim();
   fs.writeFileSync(fpath, body, 'utf8');
   var base = publicBaseUrl(cfg);
